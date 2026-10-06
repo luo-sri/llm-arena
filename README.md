@@ -11,13 +11,13 @@
 
 ## 一、下载安装包（普通用户看这里）
 
-> 源码与安装包**分开存放**：本仓库（<https://github.com/2831392974/llm-arena>）只放源码，安装包统一发布在本仓库的 **Releases（发行版）** 页面。
+> 源码与安装包**分开存放**：本仓库（<https://github.com/luo-sri/llm-arena>）只放源码，安装包统一发布在本仓库的 **Releases（发行版）** 页面。
 
 | 项目 | 说明 |
 |---|---|
 | **适用系统** | **Windows 10 / Windows 11（64 位 / x64）**。不支持 32 位系统、macOS、Linux。 |
-| **安装包位置** | GitHub Releases：<https://github.com/2831392974/llm-arena/releases/tag/v1.1.0> → 下载 `llm-arena-Setup-1.1.0.exe` |
-| 直链（点此直接下载） | <https://github.com/2831392974/llm-arena/releases/download/v1.1.0/llm-arena-Setup-1.1.0.exe> |
+| **安装包位置** | GitHub Releases：<https://github.com/luo-sri/llm-arena/releases/tag/v1.1.0> → 下载 `llm-arena-Setup-1.1.0.exe` |
+| 直链（点此直接下载） | <https://github.com/luo-sri/llm-arena/releases/download/v1.1.0/llm-arena-Setup-1.1.0.exe> |
 | 文件名 | `llm-arena-Setup-1.1.0.exe`（本地打包产物名为 `多模型评测竞技场-安装包-1.1.0.exe`，发布到 GitHub 时统一改为 ASCII 文件名，避免部分系统下载时中文乱码） |
 | 大小 | 118.13 MB |
 | SHA256 | `27B812C3663C3EB019820168A0EEA2B8CFC22413471403B94188FC397D0B82B3` |
