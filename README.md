@@ -16,15 +16,16 @@
 | 项目 | 说明 |
 |---|---|
 | **适用系统** | **Windows 10 / Windows 11（64 位 / x64）**。不支持 32 位系统、macOS、Linux。 |
-| **安装包位置** | GitHub Releases：<https://github.com/2831392974/llm-arena/releases/tag/v1.1.0> → 下载 `多模型评测竞技场-安装包-1.1.0.exe` |
-| 文件名 | `多模型评测竞技场-安装包-1.1.0.exe` |
+| **安装包位置** | GitHub Releases：<https://github.com/2831392974/llm-arena/releases/tag/v1.1.0> → 下载 `llm-arena-Setup-1.1.0.exe` |
+| 直链（点此直接下载） | <https://github.com/2831392974/llm-arena/releases/download/v1.1.0/llm-arena-Setup-1.1.0.exe> |
+| 文件名 | `llm-arena-Setup-1.1.0.exe`（本地打包产物名为 `多模型评测竞技场-安装包-1.1.0.exe`，发布到 GitHub 时统一改为 ASCII 文件名，避免部分系统下载时中文乱码） |
 | 大小 | 118.13 MB |
 | SHA256 | `27B812C3663C3EB019820168A0EEA2B8CFC22413471403B94188FC397D0B82B3` |
 | 安装方式 | 双击运行 → 阅读并**勾选同意**《用户许可、隐私与免责协议》→ 可自定义安装位置 → 完成后可勾选立即运行 |
 | 卸载方式 | 通过「开始菜单 / 控制面板」卸载 → 先展示**清理清单**，勾选同意后卸载（**安装本软件之前就已存在的配置不会被清理**） |
 | **作者联系方式** | **微信：luo09069**（使用中有疑问可直接加微信咨询） |
 
-> 下载后建议用 `certutil -hashfile 多模型评测竞技场-安装包-1.1.0.exe SHA256` 比对上方 SHA256，确认文件未被篡改。
+> 下载后建议用 `certutil -hashfile llm-arena-Setup-1.1.0.exe SHA256` 比对上方 SHA256，确认文件未被篡改。
 
 ### 安装后数据落在哪里（便于排查与彻底卸载）
 
