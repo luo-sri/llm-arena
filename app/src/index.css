@@ -1,0 +1,137 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─── 黑白极简双主题 ───────────────────────────────
+   浅色：纯白底 + 近黑字（primary 为黑）
+   深色：近黑底 + 浅白字（primary 为白）
+   全部灰阶层级，无彩色干扰，功能色仅用于状态反馈 */
+
+@layer base {
+  :root {
+    color-scheme: light;
+    --background: 0 0% 100%;
+    --foreground: 0 0% 9%;
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 9%;
+    --primary: 0 0% 9%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 0 0% 96%;
+    --secondary-foreground: 0 0% 9%;
+    --muted: 0 0% 96%;
+    --muted-foreground: 0 0% 42%;
+    --accent: 0 0% 95%;
+    --accent-foreground: 0 0% 9%;
+    --destructive: 0 72% 44%;
+    --destructive-foreground: 0 0% 98%;
+    --success: 152 62% 32%;
+    --warning: 32 92% 38%;
+    --info: 217 85% 48%;
+    --border: 0 0% 90%;
+    --input: 0 0% 90%;
+    --ring: 0 0% 9%;
+    --radius: 0.5rem;
+    --sidebar-background: 0 0% 97.5%;
+    --sidebar-foreground: 0 0% 35%;
+    --sidebar-primary: 0 0% 9%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 0 0% 93%;
+    --sidebar-accent-foreground: 0 0% 9%;
+    --sidebar-border: 0 0% 90%;
+    --sidebar-ring: 0 0% 9%;
+  }
+
+  .dark {
+    color-scheme: dark;
+    --background: 0 0% 7%;
+    --foreground: 0 0% 95%;
+    --card: 0 0% 10%;
+    --card-foreground: 0 0% 95%;
+    --popover: 0 0% 11%;
+    --popover-foreground: 0 0% 95%;
+    --primary: 0 0% 95%;
+    --primary-foreground: 0 0% 9%;
+    --secondary: 0 0% 16%;
+    --secondary-foreground: 0 0% 95%;
+    --muted: 0 0% 15%;
+    --muted-foreground: 0 0% 64%;
+    --accent: 0 0% 18%;
+    --accent-foreground: 0 0% 95%;
+    --destructive: 0 72% 66%;
+    --destructive-foreground: 0 0% 98%;
+    --success: 152 52% 52%;
+    --warning: 38 92% 60%;
+    --info: 213 92% 68%;
+    --border: 0 0% 21%;
+    --input: 0 0% 21%;
+    --ring: 0 0% 95%;
+    --sidebar-background: 0 0% 5.5%;
+    --sidebar-foreground: 0 0% 55%;
+    --sidebar-primary: 0 0% 95%;
+    --sidebar-primary-foreground: 0 0% 9%;
+    --sidebar-accent: 0 0% 14%;
+    --sidebar-accent-foreground: 0 0% 95%;
+    --sidebar-border: 0 0% 16%;
+    --sidebar-ring: 0 0% 95%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html {
+    transition: background-color 0.25s ease;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+      "Noto Sans SC", "Segoe UI", sans-serif;
+    font-feature-settings: "tnum";
+    transition: background-color 0.25s ease, color 0.25s ease;
+  }
+  .font-data {
+    font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas,
+      "Liberation Mono", monospace;
+    font-feature-settings: "tnum";
+  }
+}
+
+/* 弹层永远置顶：主题下拉、菜单、对话框、toast 不受任何容器层级与窗口尺寸影响 */
+[data-radix-popper-content-wrapper] {
+  z-index: 9999 !important;
+}
+[data-sonner-toast] {
+  z-index: 10000 !important;
+}
+
+/* 主题切换瞬间给主要表面加柔和过渡（仅颜色，不影响布局性能） */
+.card-surface,
+aside,
+main {
+  transition: background-color 0.25s ease, border-color 0.25s ease;
+}
+
+/* 细滚动条（跟随主题） */
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: hsl(0 0% 70% / 0.45);
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: hsl(0 0% 50% / 0.6);
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+.dark *::-webkit-scrollbar-thumb {
+  background: hsl(0 0% 40% / 0.5);
+}
+.dark *::-webkit-scrollbar-thumb:hover {
+  background: hsl(0 0% 60% / 0.65);
+}

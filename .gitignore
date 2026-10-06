@@ -1,0 +1,6 @@
+# 根目录兜底忽略（app/ 目录下有更细的 .gitignore）
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+desktop.ini

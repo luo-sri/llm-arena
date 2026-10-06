@@ -1,0 +1,58 @@
+# ── 依赖 ──────────────────────────────────────────────
+node_modules
+
+# ── 构建产物 ──────────────────────────────────────────
+# Vite 输出到 dist/public，esbuild 输出 dist/boot.js
+dist
+dist-ssr
+
+# electron-builder 产物（安装包 100MB+，不进仓库）
+# 安装包通过 GitHub Releases 单独分发，见根目录 README.md
+release
+
+# ── 运行时数据（本地 SQLite，运行/开发时自动生成）────
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+db/migrations/*.sql
+
+# ── 日志 ──────────────────────────────────────────────
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# ── 环境变量 ──────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ── TypeScript 缓存 ──────────────────────────────────
+*.tsbuildinfo
+
+# ── 测试覆盖 ──────────────────────────────────────────
+coverage/
+.nyc_output/
+
+# ── 编辑器 / 系统 ────────────────────────────────────
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+Thumbs.db
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+*.local
+
+# 注意：build/ 目录【不能】忽略，它是 electron-builder 的 NSIS 资源
+# （installer.nsh / license.txt / license.utf16le.txt），打包安装包时必须提交。
