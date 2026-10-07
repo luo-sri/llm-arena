@@ -9,9 +9,12 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
+import { CheckCheck } from "lucide-react";
+import { useConfirm } from "@/components/confirm";
 
 export default function ReviewPage() {
   const utils = trpc.useUtils();
+  const [confirmDialog, confirmElement] = useConfirm();
   const queue = trpc.reports.reviewQueue.useQuery(undefined, { refetchInterval: 5000 });
   const [activeId, setActiveId] = useState<number | null>(null);
   const [score, setScore] = useState(0.5);
@@ -26,6 +29,15 @@ export default function ReviewPage() {
     onError: (e) => toast.error(e.message),
   });
 
+  const ignoreAll = trpc.reports.ignoreAllReviews.useMutation({
+    onSuccess: (r) => {
+      if (r.ignored === 0) toast.info("复核队列已是空的");
+      else toast.success(`已忽略 ${r.ignored} 条复核，采纳自动判分${r.patched ? `（其中 ${r.patched} 条补齐了自动分）` : ""}`);
+      utils.reports.reviewQueue.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
   const active = queue.data?.find((q) => q.id === activeId) ?? null;
 
   return (
@@ -33,6 +45,23 @@ export default function ReviewPage() {
       <PageHeader
         title="人工复核"
         desc="规则判分与模型评审分歧超过阈值、或无任何通道得分的题目进入此队列，人工裁定后覆盖最终分"
+        actions={
+          (queue.data?.length ?? 0) > 0 ? (
+            <Button
+              size="sm" variant="outline" disabled={ignoreAll.isPending}
+              onClick={async () => {
+                if (await confirmDialog({
+                  title: `忽略全部 ${queue.data!.length} 条复核？`,
+                  description: "将采纳每条题目当前的自动判分（规则分 / 评审分）作为最终分，等同于默认认可该任务的评分，之后不再需要人工裁定。此操作不可撤销。",
+                  confirmText: "全部忽略",
+                })) ignoreAll.mutate();
+              }}
+            >
+              <CheckCheck className="h-3.5 w-3.5 mr-1" />
+              {ignoreAll.isPending ? "处理中…" : `全部忽略（${queue.data!.length}）`}
+            </Button>
+          ) : undefined
+        }
       />
       {(queue.data?.length ?? 0) === 0 ? (
         <EmptyState text="复核队列为空" hint="当双通道判分出现显著分歧时，题目会自动进入此队列" />
@@ -109,6 +138,7 @@ export default function ReviewPage() {
           )}
         </DialogContent>
       </Dialog>
+      {confirmElement}
     </div>
   );
 }

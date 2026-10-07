@@ -159,4 +159,36 @@ export const reportsRouter = createRouter({
         .where(eq(runItems.id, input.itemId));
       return { ok: true };
     }),
+
+  /**
+   * 全部忽略复核：整队一次性采纳自动判分（规则分/评审分），不再人工介入。
+   * 最终分保持原值；若原本无任何通道得分（finalScore 为空），按「规则分 → 评审分 → 0」补齐，避免留空分。
+   */
+  ignoreAllReviews: publicQuery.mutation(async () => {
+    const db = getDb();
+    const rows = await db
+      .select({
+        id: runItems.id,
+        finalScore: runItems.finalScore,
+        ruleScore: runItems.ruleScore,
+        judgeScore: runItems.judgeScore,
+      })
+      .from(runItems)
+      .where(and(eq(runItems.needsReview, true), isNull(runItems.reviewedAt)));
+    if (rows.length === 0) return { ignored: 0 };
+
+    await db
+      .update(runItems)
+      .set({ needsReview: false, reviewedAt: new Date(), reviewNote: "批量忽略：采纳自动判分" })
+      .where(inArray(runItems.id, rows.map((r) => r.id)));
+
+    let patched = 0;
+    for (const r of rows) {
+      if (r.finalScore !== null) continue;
+      const fallback = r.ruleScore ?? r.judgeScore ?? 0;
+      await db.update(runItems).set({ finalScore: fallback }).where(eq(runItems.id, r.id));
+      patched++;
+    }
+    return { ignored: rows.length, patched };
+  }),
 });

@@ -1,6 +1,6 @@
 import { getDb } from "../queries/connection";
 import { runs, runItems, runLogs, models, questions } from "@db/schema";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, sql, inArray } from "drizzle-orm";
 import { callModel } from "./provider";
 import { ruleScore, buildJudgePrompt, parseJudgeResponse } from "./scoring";
 import { generateBattles } from "./arena";
@@ -346,4 +346,45 @@ export async function retryItem(itemId: number): Promise<void> {
   } else {
     void startRun(item.runId);
   }
+}
+
+/**
+ * 批量重跑失败题目：把失败状态的记录重置为待执行并重新调度。
+ * 用于上游限流 / 网络抖动导致的失败（并非模型回答错误），给模型一次公平的补考机会。
+ * 可传 modelId 只重跑某个模型的失败项。
+ */
+export async function retryFailedItems(runId: number, modelId?: number): Promise<number> {
+  const db = getDb();
+  const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
+  if (!run) throw new Error("运行不存在");
+
+  const conds = [eq(runItems.runId, runId), eq(runItems.status, "failed")];
+  if (modelId !== undefined) conds.push(eq(runItems.modelId, modelId));
+  const failed = await db.select({ id: runItems.id }).from(runItems).where(and(...conds));
+  if (failed.length === 0) return 0;
+
+  const ids = failed.map((f) => f.id);
+  await db
+    .update(runItems)
+    .set({
+      status: "pending", responseText: null, latencyMs: null, promptTokens: null,
+      completionTokens: null, ruleScore: null, judgeScore: null, judgeReason: null,
+      finalScore: null, scoreDetail: null, error: null, retryCount: 0,
+      needsReview: false, reviewScore: null, reviewNote: null, reviewedAt: null, finishedAt: null,
+    })
+    .where(inArray(runItems.id, ids));
+
+  await log(runId, "info",
+    `批量重跑失败题目：共 ${ids.length} 条${modelId !== undefined ? `（仅模型 #${modelId}）` : ""}，已重置为待执行`);
+  await recomputeRunCounts(runId);
+
+  // 运行已结束时需重新激活，否则调度器不会继续消费待执行项
+  if (run.status === "completed" || run.status === "failed" || run.status === "cancelled") {
+    await db
+      .update(runs)
+      .set({ status: "running", finishedAt: null, error: null })
+      .where(eq(runs.id, runId));
+  }
+  void startRun(runId);
+  return ids.length;
 }

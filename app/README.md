@@ -24,7 +24,7 @@ npm run dev        # 前端 + 后端同端口：http://localhost:3000
 | `npm run dist` | 打包 Windows 安装包（含协议转码 → 构建 → electron-builder） |
 | `npm run check` | TypeScript 类型检查（`tsc -b`） |
 | `npm test` | 单元测试（Vitest） |
-| `npm run selfcheck` | 端到端自检（跑通完整评测流程并校验公平性不变量） |
+| `npm run selfcheck` | 端到端自检（跑通完整评测流程、竞技场评级、逐题明细分页/失败批量重跑/复核全部忽略，并校验公平性不变量，结束时自动清理） |
 | `npm run verify` | 功能验证（暂停/继续/取消/报告/复核/导入导出/历史对比） |
 | `npm run seed` | 手动写入内置题库与默认套件 |
 

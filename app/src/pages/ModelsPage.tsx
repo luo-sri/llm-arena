@@ -15,7 +15,8 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
-import { Plus, Upload, Zap, Trash2, Pencil, FlaskConical } from "lucide-react";
+import { Plus, Upload, Zap, Trash2, Pencil, FlaskConical, Activity } from "lucide-react";
+import { Progress } from "@/components/ui/progress";
 import { useConfirm } from "@/components/confirm";
 
 type ModelForm = {
@@ -26,6 +27,9 @@ const emptyForm: ModelForm = {
   name: "", provider: "openai", baseUrl: "", apiKey: "", modelId: "",
   groupId: null, inputPrice: 0, outputPrice: 0, notes: "",
 };
+
+type BatchResult = { id: number; name: string; ok: boolean; latencyMs?: number; error?: string };
+type BatchState = { running: boolean; done: number; total: number; results: BatchResult[] };
 
 export default function ModelsPage() {
   const utils = trpc.useUtils();
@@ -38,6 +42,7 @@ export default function ModelsPage() {
   const [groupForm, setGroupForm] = useState({ name: "", color: "#2563eb" });
   const [testingId, setTestingId] = useState<number | null>(null);
   const [filterGroup, setFilterGroup] = useState<string>("all");
+  const [batch, setBatch] = useState<BatchState | null>(null);
 
   const invalidate = () => utils.models.list.invalidate();
 
@@ -73,6 +78,8 @@ export default function ModelsPage() {
     },
     onError: (e) => { setTestingId(null); toast.error(e.message); invalidate(); },
   });
+  /** 批量测试用：静默执行，不弹单条 toast，由批量流程统一汇总 */
+  const testSilent = trpc.models.test.useMutation();
   const createGroup = trpc.models.createGroup.useMutation({
     onSuccess: () => { toast.success("分组已创建"); setDialog(null); invalidate(); },
     onError: (e) => toast.error(e.message),
@@ -123,15 +130,48 @@ export default function ModelsPage() {
     else if (editId !== null) update.mutate({ id: editId, data: form });
   };
 
+  /**
+   * 批量连接测试：对当前筛选出的模型逐个测试（串行，避免同时打满上游触发限流），
+   * 实时刷新进度，结束后汇总结果。
+   */
+  const runBatchTest = async () => {
+    const targets = models;
+    if (targets.length === 0) { toast.error("当前筛选下没有可测试的模型"); return; }
+    setBatch({ running: true, done: 0, total: targets.length, results: [] });
+    const results: BatchResult[] = [];
+    for (const m of targets) {
+      let item: BatchResult;
+      try {
+        const r = await testSilent.mutateAsync({ id: m.id });
+        item = r.ok
+          ? { id: m.id, name: m.name, ok: true, latencyMs: r.latencyMs }
+          : { id: m.id, name: m.name, ok: false, error: r.error };
+      } catch (e) {
+        item = { id: m.id, name: m.name, ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+      results.push(item);
+      setBatch({ running: true, done: results.length, total: targets.length, results: [...results] });
+    }
+    invalidate();
+    setBatch({ running: false, done: results.length, total: targets.length, results });
+    const okCount = results.filter((r) => r.ok).length;
+    if (okCount === results.length) toast.success(`批量测试完成：${results.length} 个模型全部连接正常`);
+    else toast.warning(`批量测试完成：正常 ${okCount}，失败 ${results.length - okCount}`);
+  };
+
   return (
     <div>
       <PageHeader
         title="模型管理"
-        desc="批量导入 / 增删改查 / 连接测试 / 分组管理"
+        desc="批量导入 / 增删改查 / 单条与批量连接测试 / 分组管理"
         actions={
           <>
             <Button size="sm" variant="outline" onClick={() => addMock.mutate()}>
               <FlaskConical className="h-3.5 w-3.5 mr-1" />模拟模型
+            </Button>
+            <Button size="sm" variant="outline" onClick={runBatchTest} disabled={batch?.running}>
+              <Activity className={`h-3.5 w-3.5 mr-1 ${batch?.running ? "animate-pulse" : ""}`} />
+              {batch?.running ? `测试中 ${batch.done}/${batch.total}` : "批量测试"}
             </Button>
             <Button size="sm" variant="outline" onClick={() => setDialog("import")}>
               <Upload className="h-3.5 w-3.5 mr-1" />批量导入
@@ -340,6 +380,51 @@ export default function ModelsPage() {
               if (!groupForm.name.trim()) { toast.error("请填写分组名称"); return; }
               createGroup.mutate(groupForm);
             }}>创建</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 批量连接测试：进度 + 逐模型结果 */}
+      <Dialog open={batch !== null} onOpenChange={(o) => { if (!o && !batch?.running) setBatch(null); }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>批量连接测试{batch?.running ? "（进行中）" : "结果"}</DialogTitle>
+          </DialogHeader>
+          {batch && (
+            <>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground">
+                    共 {batch.total} 个模型 · 正常{" "}
+                    <span className="text-success font-data">{batch.results.filter((r) => r.ok).length}</span> · 失败{" "}
+                    <span className="text-destructive font-data">{batch.results.filter((r) => !r.ok).length}</span>
+                  </span>
+                  <span className="font-data text-muted-foreground">{batch.done}/{batch.total}</span>
+                </div>
+                <Progress value={batch.total ? (batch.done / batch.total) * 100 : 0} className="h-1.5" />
+              </div>
+              <div className="max-h-[46vh] overflow-y-auto border border-border rounded-md divide-y divide-border/60">
+                {batch.results.map((r) => (
+                  <div key={r.id} className="flex items-center gap-2 px-3 py-2 text-xs">
+                    <span className="truncate">{r.name}</span>
+                    <span className="ml-auto flex items-center gap-2 shrink-0">
+                      <StatusBadge status={r.ok ? "ok" : "fail"} />
+                      {r.ok
+                        ? <span className="font-data text-muted-foreground">{fmtMs(r.latencyMs)}</span>
+                        : <span className="font-data text-destructive max-w-[200px] truncate" title={r.error}>{r.error}</span>}
+                    </span>
+                  </div>
+                ))}
+                {batch.results.length === 0 && (
+                  <div className="px-3 py-6 text-center text-xs text-muted-foreground">正在测试第一个模型…</div>
+                )}
+              </div>
+            </>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBatch(null)} disabled={batch?.running}>
+              {batch?.running ? "测试中…" : "关闭"}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

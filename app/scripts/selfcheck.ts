@@ -6,11 +6,12 @@
  * 4. 轮询直至完成，校验汇总结果与公平性不变量
  * 5. 专业指标（难度分层 / pass@k / 置信区间）
  * 6. 竞技场对战（生成 / Bradley-Terry 评级 / 排行榜 / 幂等重建）
+ * 7. 新增功能（逐题明细分页 / 失败批量重跑 / 复核全部忽略）
  */
 import { appRouter } from "../api/router";
 import { getDb, getReadyDb } from "../api/queries/connection";
-import { questions, models } from "../db/schema";
-import { eq, and, sql } from "drizzle-orm";
+import { questions, models, runItems } from "../db/schema";
+import { eq, and, sql, inArray } from "drizzle-orm";
 import { DEFAULT_SUITE_CONFIG, type SuiteConfig } from "../contracts/eval";
 
 const caller = appRouter.createCaller({
@@ -30,13 +31,13 @@ async function main() {
   console.log("== 多模型评测系统 · 端到端自检 ==\n");
 
   // 1. 数据库
-  console.log("[1/6] 数据库连接");
+  console.log("[1/7] 数据库连接");
   const db = await getReadyDb();
   const [qc] = await db.select({ n: sql<number>`count(*)` }).from(questions);
   ok("数据库可连接", Number(qc.n) > 0, `题库共 ${Number(qc.n)} 题`);
 
   // 2. 模拟模型
-  console.log("[2/6] 模拟模型与连接测试");
+  console.log("[2/7] 模拟模型与连接测试");
   await caller.models.addMockModels();
   const { models: allModels } = await caller.models.list();
   const mocks = allModels.filter((m) => m.provider === "mock" && m.enabled);
@@ -45,7 +46,7 @@ async function main() {
   ok("连接测试通过", t.ok, t.ok ? `${t.latencyMs}ms` : "");
 
   // 3. 迷你套件
-  console.log("[3/6] 创建迷你套件（逻辑/数学/指令 × 2 题 × 2 轮，种子固定）");
+  console.log("[3/7] 创建迷你套件（逻辑/数学/指令 × 2 题 × 2 轮，种子固定）");
   const cfg: SuiteConfig = JSON.parse(JSON.stringify(DEFAULT_SUITE_CONFIG));
   for (const k of Object.keys(cfg.categories)) {
     cfg.categories[k] = { enabled: ["logic", "math", "instruction"].includes(k), count: 2, weight: 1 };
@@ -60,7 +61,7 @@ async function main() {
   ok("套件创建", !!suite?.id);
 
   // 4. 创建并执行运行
-  console.log("[4/6] 执行评测运行");
+  console.log("[4/7] 执行评测运行");
   const { runId, totalItems } = await caller.runs.create({
     name: `自检运行 ${new Date().toISOString()}`,
     suiteId: suite!.id,
@@ -84,7 +85,7 @@ async function main() {
   ok("无漏判", run.doneItems + run.failedItems === run.totalItems);
 
   // 5. 汇总与公平性不变量
-  console.log("[5/6] 汇总结果与公平性校验");
+  console.log("[5/7] 汇总结果与公平性校验");
   const summaries = await caller.runs.summary({ id: runId });
   ok("产出各模型汇总", summaries.length === mocks.slice(0, 3).length);
   ok("总分在 0~100", summaries.every((s) => s.total >= 0 && s.total <= 100));
@@ -93,7 +94,7 @@ async function main() {
   ok("成功率统计", summaries.every((s) => s.successRate >= 0 && s.successRate <= 1));
 
   // 公平性：同一 run 内所有模型同一 seq 对应同一题目
-  const items = await caller.runs.items({ runId, limit: 1000 });
+  const items = (await caller.runs.items({ runId, limit: 1000 })).rows;
   const seqToQ = new Map<number, number>();
   let fair = true;
   for (const it of items) {
@@ -118,7 +119,7 @@ async function main() {
   ok("总分置信区间", summaries.every((s) => s.totalCI === null || (s.totalCI[0] <= s.total && s.totalCI[1] >= s.total)));
 
   // 竞技场对战（运行完成后由调度器异步生成，需轮询等待）
-  console.log("[6/6] 竞技场对战与 Bradley-Terry 评级");
+  console.log("[6/7] 竞技场对战与 Bradley-Terry 评级");
   const battleDeadline = Date.now() + 30_000;
   let arena = await caller.runs.arena({ id: runId });
   while (arena.total === 0 && Date.now() < battleDeadline) {
@@ -151,6 +152,63 @@ async function main() {
       `    ${r.modelName.padEnd(12)} Elo ${r.rating.toFixed(1).padStart(6)}  CI [${r.ciLow.toFixed(0)}, ${r.ciHigh.toFixed(0)}]  ` +
       `${r.wins}胜/${r.losses}负/${r.ties}平  胜率 ${(r.winRate * 100).toFixed(1)}%`,
     );
+  }
+
+  // 7. 新增功能：分页 / 失败批量重跑 / 复核全部忽略
+  console.log("[7/7] 新增功能：逐题明细分页 / 失败批量重跑 / 复核全部忽略");
+
+  // 7.1 逐题明细分页（返回当前页记录 + 筛选后总数）
+  const page1 = await caller.runs.items({ runId, limit: 10, offset: 0 });
+  const page2 = await caller.runs.items({ runId, limit: 10, offset: 10 });
+  ok("分页返回筛选总数", page1.total === 36, `total=${page1.total}`);
+  ok("第一页条数正确", page1.rows.length === 10);
+  ok("翻页取到不同记录", page1.rows[0]?.id !== page2.rows[0]?.id);
+  const allRows = await caller.runs.items({ runId, limit: 100, offset: 0 });
+  ok("大页可覆盖全部记录", allRows.rows.length === 36);
+
+  // 7.2 失败批量重跑：模拟上游限流导致的失败，再整批补考
+  const targetModelId = mocks[0].id;
+  const modelItems = await db
+    .select({ id: runItems.id })
+    .from(runItems)
+    .where(and(eq(runItems.runId, runId), eq(runItems.modelId, targetModelId)));
+  const failIds = modelItems.slice(0, 2).map((x) => x.id);
+  await db
+    .update(runItems)
+    .set({ status: "failed", error: "自检模拟失败：上游限流", finalScore: null })
+    .where(inArray(runItems.id, failIds));
+  const retried = await caller.runs.retryFailed({ runId, modelId: targetModelId });
+  ok("批量重跑命中失败记录", retried.retried === failIds.length, `重跑 ${retried.retried} 条`);
+
+  const retryDeadline = Date.now() + 60_000;
+  let run2 = await caller.runs.get({ id: runId });
+  while (run2.status !== "completed" && run2.status !== "failed" && Date.now() < retryDeadline) {
+    await new Promise((r) => setTimeout(r, 500));
+    run2 = await caller.runs.get({ id: runId });
+  }
+  ok("补跑后运行重新完成", run2.status === "completed", run2.status);
+  const afterRetry = await caller.runs.items({ runId, modelId: targetModelId, limit: 100 });
+  ok("失败记录已恢复为成功", afterRetry.rows.filter((x) => failIds.includes(x.id)).every((x) => x.status === "done"));
+
+  // 7.3 复核全部忽略：采纳自动判分作为最终分
+  // 该接口按设计是全局的，为避免误清空真实待复核记录，仅当全局队列为空时才执行写入校验
+  const globalQueueBefore = await caller.reports.reviewQueue();
+  if (globalQueueBefore.length === 0) {
+    const reviewIds = modelItems.slice(2, 4).map((x) => x.id);
+    await db
+      .update(runItems)
+      .set({ needsReview: true, reviewedAt: null, finalScore: null, reviewScore: null })
+      .where(inArray(runItems.id, reviewIds));
+    const queueBefore = await caller.reports.reviewQueue();
+    ok("复核队列可读取待复核记录", queueBefore.length === reviewIds.length, `${queueBefore.length} 条`);
+    const ignored = await caller.reports.ignoreAllReviews();
+    ok("全部忽略处理条数", ignored.ignored === reviewIds.length, `忽略 ${ignored.ignored} 条`);
+    const queueAfter = await caller.reports.reviewQueue();
+    ok("忽略后队列清空", queueAfter.length === 0);
+    const afterIgnore = await caller.runs.items({ runId, modelId: targetModelId, limit: 100 });
+    ok("忽略后补齐自动判分", afterIgnore.rows.filter((x) => reviewIds.includes(x.id)).every((x) => x.finalScore !== null));
+  } else {
+    console.log(`  · 跳过「全部忽略」写入校验：检测到 ${globalQueueBefore.length} 条真实待复核记录，避免误清空`);
   }
 
   // 清理：删除本次自检创建的临时运行与套件，避免污染「评测任务」「报告中心」等列表

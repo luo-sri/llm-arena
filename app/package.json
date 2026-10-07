@@ -1,7 +1,7 @@
 {
   "name": "llm-arena",
   "private": true,
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "多模型能力评测竞技场",
   "author": "多模型评测竞技场",
   "type": "module",
@@ -133,7 +133,7 @@
           ]
         }
       ],
-      "artifactName": "多模型评测竞技场-安装包-${version}.exe"
+      "artifactName": "llm-arena-Setup-${version}.exe"
     },
     "nsis": {
       "oneClick": false,
@@ -148,7 +148,7 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "runAfterFinish": true,
-      "artifactName": "多模型评测竞技场-安装包-${version}.exe"
+      "artifactName": "llm-arena-Setup-${version}.exe"
     }
   }
 }

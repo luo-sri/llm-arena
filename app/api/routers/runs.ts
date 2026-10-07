@@ -7,7 +7,7 @@ import { BANK_VERSION, type SuiteConfig } from "../../contracts/eval";
 import { computeBankHash } from "../engine/bank";
 import { seededShuffle } from "../engine/random";
 import { selectQuestions, describeLevels } from "../engine/selection";
-import { startRun, pauseRun, resumeRun, cancelRun, retryItem, recomputeRunCounts, log, recoverRunsOnce, isRunActive } from "../engine/scheduler";
+import { startRun, pauseRun, resumeRun, cancelRun, retryItem, retryFailedItems, recomputeRunCounts, log, recoverRunsOnce, isRunActive } from "../engine/scheduler";
 import { summarizeRun } from "../engine/aggregate";
 import { arenaForRun, generateBattles, globalLeaderboard } from "../engine/arena";
 
@@ -237,7 +237,7 @@ export const runsRouter = createRouter({
         .limit(300);
     }),
 
-  /** 逐题明细 */
+  /** 逐题明细（分页）：返回当前页记录与筛选后的总数 */
   items: publicQuery
     .input(
       z.object({
@@ -245,7 +245,8 @@ export const runsRouter = createRouter({
         modelId: z.number().optional(),
         status: z.string().optional(),
         needsReview: z.boolean().optional(),
-        limit: z.number().int().min(1).max(1000).default(300),
+        limit: z.number().int().min(1).max(1000).default(100),
+        offset: z.number().int().min(0).default(0),
       }),
     )
     .query(async ({ input }) => {
@@ -254,29 +255,46 @@ export const runsRouter = createRouter({
       if (input.modelId) conds.push(eq(runItems.modelId, input.modelId));
       if (input.status) conds.push(eq(runItems.status, input.status));
       if (input.needsReview !== undefined) conds.push(eq(runItems.needsReview, input.needsReview));
+      const where = and(...conds);
+      const [countRow] = await db
+        .select({ n: sql<number>`count(*)` })
+        .from(runItems)
+        .where(where);
       const rows = await db
         .select()
         .from(runItems)
-        .where(and(...conds))
+        .where(where)
         .orderBy(runItems.seq, runItems.modelId, runItems.repeatIndex)
-        .limit(input.limit);
+        .limit(input.limit)
+        .offset(input.offset);
       const qIds = [...new Set(rows.map((r) => r.questionId))];
       const mIds = [...new Set(rows.map((r) => r.modelId))];
       const qs = qIds.length ? await db.select().from(questions).where(inArray(questions.id, qIds)) : [];
       const ms = mIds.length ? await db.select().from(models).where(inArray(models.id, mIds)) : [];
       const qMap = new Map(qs.map((q) => [q.id, q]));
       const mMap = new Map(ms.map((m) => [m.id, m]));
-      return rows.map((r) => ({
-        ...r,
-        question: qMap.get(r.questionId) ?? null,
-        modelName: mMap.get(r.modelId)?.name ?? `#${r.modelId}`,
-      }));
+      return {
+        rows: rows.map((r) => ({
+          ...r,
+          question: qMap.get(r.questionId) ?? null,
+          modelName: mMap.get(r.modelId)?.name ?? `#${r.modelId}`,
+        })),
+        total: Number(countRow.n),
+      };
     }),
 
   retryItem: publicQuery.input(z.object({ itemId: z.number() })).mutation(async ({ input }) => {
     await retryItem(input.itemId);
     return { ok: true };
   }),
+
+  /** 批量重跑失败题目：给上游限流/网络抖动导致的失败一次补考机会 */
+  retryFailed: publicQuery
+    .input(z.object({ runId: z.number(), modelId: z.number().optional() }))
+    .mutation(async ({ input }) => {
+      const retried = await retryFailedItems(input.runId, input.modelId);
+      return { retried };
+    }),
 
   recount: publicQuery.input(z.object({ id: z.number() })).mutation(async ({ input }) => {
     await recomputeRunCounts(input.id);

@@ -13,13 +13,23 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import {
+  Popover, PopoverContent, PopoverTrigger,
+} from "@/components/ui/popover";
+import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
-import { ArrowLeft, Play, Pause, Square, RotateCcw, FileText, Eye, Trophy, RefreshCw } from "lucide-react";
+import {
+  ArrowLeft, Play, Pause, Square, RotateCcw, FileText, Eye, Trophy, RefreshCw,
+  ChevronDown, ChevronLeft, ChevronRight, SlidersHorizontal,
+} from "lucide-react";
 import {
   RadarChart, PolarGrid, PolarAngleAxis, Radar, ResponsiveContainer,
   BarChart, Bar, XAxis, YAxis, Tooltip, Legend, CartesianGrid, Cell,
 } from "recharts";
 import { CATEGORIES, DIFFICULTY_MAP, type SuiteConfig, DISCLAIMER } from "../../contracts/eval";
+
+/** 逐题明细分页大小 */
+const PAGE_SIZE = 100;
 
 export default function RunDetail({ runId, onBack }: { runId: number; onBack: () => void }) {
   const utils = trpc.useUtils();
@@ -33,17 +43,31 @@ export default function RunDetail({ runId, onBack }: { runId: number; onBack: ()
   const logsQuery = trpc.runs.logs.useQuery({ runId, sinceId: logSince }, { refetchInterval: 2000 });
   const [modelFilter, setModelFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [page, setPage] = useState(1);
+  /** 雷达图/维度类图表要展示的模型；null 表示全部 */
+  const [radarModels, setRadarModels] = useState<number[] | null>(null);
   const items = trpc.runs.items.useQuery(
     {
       runId,
       modelId: modelFilter === "all" ? undefined : Number(modelFilter),
       status: statusFilter === "all" ? undefined : statusFilter,
-      limit: 500,
+      limit: PAGE_SIZE,
+      offset: (page - 1) * PAGE_SIZE,
     },
     { refetchInterval: 4000 },
   );
-  const [itemDetail, setItemDetail] = useState<number | null>(null);
+  const itemRows = items.data?.rows ?? [];
+  const itemTotal = items.data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(itemTotal / PAGE_SIZE));
+  const [detailItem, setDetailItem] = useState<NonNullable<typeof items.data>["rows"][number] | null>(null);
   const logBox = useRef<HTMLDivElement>(null);
+
+  // 切换运行或筛选条件时回到第一页
+  useEffect(() => { setPage(1); }, [runId, modelFilter, statusFilter]);
+  // 记录数变化导致页码越界时回退
+  useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
+  // 切换运行时重置雷达图勾选
+  useEffect(() => { setRadarModels(null); }, [runId]);
 
   useEffect(() => {
     if (logsQuery.data && logsQuery.data.length > 0) {
@@ -61,6 +85,16 @@ export default function RunDetail({ runId, onBack }: { runId: number; onBack: ()
   const cancel = trpc.runs.cancel.useMutation({ onSuccess: () => utils.runs.get.invalidate() });
   const retry = trpc.runs.retryItem.useMutation({
     onSuccess: () => { toast.success("已重置并重跑该题"); utils.runs.items.invalidate(); },
+    onError: (e) => toast.error(e.message),
+  });
+  const retryFailed = trpc.runs.retryFailed.useMutation({
+    onSuccess: (res) => {
+      if (res.retried === 0) toast.info("当前没有失败状态的记录");
+      else toast.success(`已重新排队 ${res.retried} 条失败记录，正在补跑（可切到「实时日志」查看进度）`);
+      utils.runs.items.invalidate();
+      utils.runs.get.invalidate();
+      utils.runs.summary.invalidate();
+    },
     onError: (e) => toast.error(e.message),
   });
   const regenBattles = trpc.runs.regenBattles.useMutation({
@@ -84,17 +118,30 @@ export default function RunDetail({ runId, onBack }: { runId: number; onBack: ()
   const done = r ? r.doneItems + r.failedItems : 0;
   const pct = r?.totalItems ? Math.round((done / r.totalItems) * 100) : 0;
 
+  const allSummary = useMemo(() => summary.data ?? [], [summary.data]);
+
+  /** 颜色按模型在完整列表中的位置固定，勾选筛选不会改变配色 */
+  const colorOf = (modelId: number) =>
+    chart.series[Math.max(0, allSummary.findIndex((x) => x.modelId === modelId)) % chart.series.length];
+
+  /** 雷达图 / 单项能力条形图 实际展示的模型集合（null = 全部模型） */
+  const shownSummary = useMemo(() => {
+    if (radarModels === null) return allSummary;
+    const set = new Set(radarModels);
+    return allSummary.filter((s) => set.has(s.modelId));
+  }, [allSummary, radarModels]);
+
   const radarData = useMemo(() => {
-    if (!summary.data) return [];
+    if (shownSummary.length === 0) return [];
     return CATEGORIES.map((c) => {
       const row: Record<string, string | number> = { dim: c.name };
       let has = false;
-      for (const s of summary.data!) {
+      for (const s of shownSummary) {
         if (s.categories[c.key] !== undefined) { row[s.modelName] = s.categories[c.key]; has = true; }
       }
       return has ? row : null;
     }).filter(Boolean) as Record<string, string | number>[];
-  }, [summary.data]);
+  }, [shownSummary]);
 
   const barData = useMemo(() => {
     if (!summary.data) return [];
@@ -105,6 +152,10 @@ export default function RunDetail({ runId, onBack }: { runId: number; onBack: ()
     if (!summary.data) return [];
     return summary.data.map((s) => ({ name: s.modelName, 平均时延: s.avgLatencyMs, P95时延: s.p95LatencyMs }));
   }, [summary.data]);
+
+  /** 模型较多时旋转横轴标签，避免 Recharts 自动隐藏导致名称显示不全 */
+  const axisDense = barData.length > 5;
+  const shortName = (v: string) => (v.length > 12 ? `${v.slice(0, 11)}…` : v);
 
   const difficultyData = useMemo(() => {
     if (!summary.data) return [];
@@ -118,8 +169,6 @@ export default function RunDetail({ runId, onBack }: { runId: number; onBack: ()
       return row;
     });
   }, [summary.data]);
-
-  const detailItem = useMemo(() => items.data?.find((i) => i.id === itemDetail) ?? null, [items.data, itemDetail]);
 
   if (!r) return <div className="text-sm text-muted-foreground">加载中…</div>;
 
@@ -191,7 +240,7 @@ export default function RunDetail({ runId, onBack }: { runId: number; onBack: ()
         <TabsList className="mb-3">
           <TabsTrigger value="charts" className="text-xs">结果可视化</TabsTrigger>
           <TabsTrigger value="arena" className="text-xs">竞技场对战（{arena.data?.total ?? 0}）</TabsTrigger>
-          <TabsTrigger value="items" className="text-xs">逐题明细（{items.data?.length ?? 0}）</TabsTrigger>
+          <TabsTrigger value="items" className="text-xs">逐题明细（{itemTotal}）</TabsTrigger>
           <TabsTrigger value="logs" className="text-xs">实时日志（{logs.length}）</TabsTrigger>
         </TabsList>
 
@@ -203,20 +252,66 @@ export default function RunDetail({ runId, onBack }: { runId: number; onBack: ()
             <>
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
                 <Card>
-                  <CardHeader className="py-2.5"><CardTitle className="text-xs">维度雷达图</CardTitle></CardHeader>
+                  <CardHeader className="py-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <CardTitle className="text-xs">维度雷达图</CardTitle>
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button size="sm" variant="outline" className="h-7 text-xs">
+                            <SlidersHorizontal className="h-3 w-3 mr-1" />
+                            显示模型（{shownSummary.length}/{allSummary.length}）
+                            <ChevronDown className="h-3 w-3 ml-1" />
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent align="end" className="w-64 p-0">
+                          <div className="flex items-center justify-between px-3 py-2 border-b border-border">
+                            <span className="text-[11px] text-muted-foreground">勾选要展示的模型</span>
+                            <span className="flex gap-2">
+                              <button className="text-[11px] text-primary hover:underline" onClick={() => setRadarModels(null)}>全选</button>
+                              <button className="text-[11px] text-primary hover:underline" onClick={() => setRadarModels([])}>清空</button>
+                            </span>
+                          </div>
+                          <div className="max-h-64 overflow-y-auto py-1">
+                            {allSummary.map((s) => {
+                              const checked = radarModels === null || radarModels.includes(s.modelId);
+                              return (
+                                <label key={s.modelId} className="flex items-center gap-2 px-3 py-1.5 hover:bg-accent/40 cursor-pointer text-xs">
+                                  <Checkbox
+                                    checked={checked}
+                                    onCheckedChange={(v) => {
+                                      const base = radarModels === null ? allSummary.map((x) => x.modelId) : [...radarModels];
+                                      if (v) { if (!base.includes(s.modelId)) base.push(s.modelId); }
+                                      else { const idx = base.indexOf(s.modelId); if (idx >= 0) base.splice(idx, 1); }
+                                      setRadarModels(base);
+                                    }}
+                                  />
+                                  <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: colorOf(s.modelId) }} />
+                                  <span className="truncate" title={s.modelName}>{s.modelName}</span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </PopoverContent>
+                      </Popover>
+                    </div>
+                  </CardHeader>
                   <CardContent>
-                    <ResponsiveContainer width="100%" height={300}>
-                      <RadarChart data={radarData}>
-                        <PolarGrid stroke={chart.grid} />
-                        <PolarAngleAxis dataKey="dim" tick={{ fill: chart.tick, fontSize: 11 }} />
-                        {summary.data!.map((s, i) => (
-                          <Radar key={s.modelId} name={s.modelName} dataKey={s.modelName}
-                            stroke={chart.series[i % chart.series.length]} fill={chart.series[i % chart.series.length]} fillOpacity={0.12} />
-                        ))}
-                        <Legend wrapperStyle={{ fontSize: 11, color: chart.legend }} />
-                        <Tooltip contentStyle={chart.tooltip} itemStyle={{ color: chart.legend }} labelStyle={{ color: chart.legend }} />
-                      </RadarChart>
-                    </ResponsiveContainer>
+                    {shownSummary.length === 0 ? (
+                      <div className="text-xs text-muted-foreground py-16 text-center">未选择任何模型，请在右上角「显示模型」中勾选</div>
+                    ) : (
+                      <ResponsiveContainer width="100%" height={300}>
+                        <RadarChart data={radarData}>
+                          <PolarGrid stroke={chart.grid} />
+                          <PolarAngleAxis dataKey="dim" tick={{ fill: chart.tick, fontSize: 11 }} />
+                          {shownSummary.map((s) => (
+                            <Radar key={s.modelId} name={s.modelName} dataKey={s.modelName}
+                              stroke={colorOf(s.modelId)} fill={colorOf(s.modelId)} fillOpacity={0.12} />
+                          ))}
+                          <Legend wrapperStyle={{ fontSize: 11, color: chart.legend }} />
+                          <Tooltip contentStyle={chart.tooltip} itemStyle={{ color: chart.legend }} labelStyle={{ color: chart.legend }} />
+                        </RadarChart>
+                      </ResponsiveContainer>
+                    )}
                   </CardContent>
                 </Card>
                 <Card>
@@ -225,7 +320,14 @@ export default function RunDetail({ runId, onBack }: { runId: number; onBack: ()
                     <ResponsiveContainer width="100%" height={300}>
                       <BarChart data={barData}>
                         <CartesianGrid stroke={chart.grid} strokeDasharray="3 3" />
-                        <XAxis dataKey="name" tick={{ fill: chart.tick, fontSize: 11 }} />
+                        <XAxis
+                          dataKey="name" interval={0}
+                          tick={{ fill: chart.tick, fontSize: axisDense ? 10 : 11 }}
+                          angle={axisDense ? -40 : 0}
+                          textAnchor={axisDense ? "end" : "middle"}
+                          height={axisDense ? 96 : 30}
+                          tickFormatter={axisDense ? shortName : undefined}
+                        />
                         <YAxis domain={[0, 100]} tick={{ fill: chart.tick, fontSize: 10 }} />
                         <Tooltip contentStyle={chart.tooltip} itemStyle={{ color: chart.legend }} labelStyle={{ color: chart.legend }} />
                         <Bar dataKey="总分" radius={[3, 3, 0, 0]}>
@@ -248,8 +350,8 @@ export default function RunDetail({ runId, onBack }: { runId: number; onBack: ()
                       <YAxis type="category" dataKey="dim" tick={{ fill: chart.tick, fontSize: 11 }} width={90} />
                       <Tooltip contentStyle={chart.tooltip} itemStyle={{ color: chart.legend }} labelStyle={{ color: chart.legend }} />
                       <Legend wrapperStyle={{ fontSize: 11, color: chart.legend }} />
-                      {summary.data!.map((s, i) => (
-                        <Bar key={s.modelId} name={s.modelName} dataKey={s.modelName} fill={chart.series[i % chart.series.length]} radius={[0, 3, 3, 0]} />
+                      {shownSummary.map((s) => (
+                        <Bar key={s.modelId} name={s.modelName} dataKey={s.modelName} fill={colorOf(s.modelId)} radius={[0, 3, 3, 0]} />
                       ))}
                     </BarChart>
                   </ResponsiveContainer>
@@ -284,7 +386,14 @@ export default function RunDetail({ runId, onBack }: { runId: number; onBack: ()
                     <ResponsiveContainer width="100%" height={260}>
                       <BarChart data={latencyData}>
                         <CartesianGrid stroke={chart.grid} strokeDasharray="3 3" />
-                        <XAxis dataKey="name" tick={{ fill: chart.tick, fontSize: 11 }} />
+                        <XAxis
+                          dataKey="name" interval={0}
+                          tick={{ fill: chart.tick, fontSize: axisDense ? 10 : 11 }}
+                          angle={axisDense ? -40 : 0}
+                          textAnchor={axisDense ? "end" : "middle"}
+                          height={axisDense ? 96 : 30}
+                          tickFormatter={axisDense ? shortName : undefined}
+                        />
                         <YAxis tick={{ fill: chart.tick, fontSize: 10 }} />
                         <Tooltip contentStyle={chart.tooltip} itemStyle={{ color: chart.legend }} labelStyle={{ color: chart.legend }} />
                         <Legend wrapperStyle={{ fontSize: 11, color: chart.legend }} />
@@ -489,6 +598,23 @@ export default function RunDetail({ runId, onBack }: { runId: number; onBack: ()
                 <SelectItem value="skipped">已跳过</SelectItem>
               </SelectContent>
             </Select>
+            <Button
+              size="sm" variant="outline" className="h-8 text-xs ml-auto"
+              disabled={retryFailed.isPending || (modelFilter === "all" && r.failedItems === 0)}
+              onClick={async () => {
+                if (await confirmDialog({
+                  title: "批量重跑失败题目？",
+                  description:
+                    "所有失败状态的记录将重置并重新调用模型，原失败记录会被覆盖。适用于上游限流、超时或网络抖动导致的失败（并非模型回答错误），给模型一次公平的补考机会。",
+                  confirmText: "批量重跑",
+                })) retryFailed.mutate({ runId, modelId: modelFilter === "all" ? undefined : Number(modelFilter) });
+              }}
+            >
+              <RotateCcw className={`h-3.5 w-3.5 mr-1 ${retryFailed.isPending ? "animate-spin" : ""}`} />
+              {retryFailed.isPending
+                ? "提交中…"
+                : `批量重跑失败${modelFilter === "all" ? `（${r.failedItems}）` : ""}`}
+            </Button>
           </div>
           <div className="border border-border rounded-md overflow-hidden">
             <table className="w-full text-xs">
@@ -508,7 +634,10 @@ export default function RunDetail({ runId, onBack }: { runId: number; onBack: ()
                 </tr>
               </thead>
               <tbody>
-                {items.data?.map((i) => (
+                {itemRows.length === 0 && (
+                  <tr><td colSpan={11} className="px-2.5 py-10 text-center text-muted-foreground">当前筛选下没有记录</td></tr>
+                )}
+                {itemRows.map((i) => (
                   <tr key={i.id} className="border-t border-border/60 hover:bg-accent/30">
                     <td className="px-2.5 py-1.5 font-data text-muted-foreground">{i.seq + 1}</td>
                     <td className="px-2.5 py-1.5">{i.modelName}</td>
@@ -526,7 +655,7 @@ export default function RunDetail({ runId, onBack }: { runId: number; onBack: ()
                     <td className="px-2.5 py-1.5">
                       <div className="flex gap-0.5 justify-end">
                         <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title="查看回答与判分"
-                          onClick={() => setItemDetail(i.id)}><Eye className="h-3 w-3" /></Button>
+                          onClick={() => setDetailItem(i)}><Eye className="h-3 w-3" /></Button>
                         <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title="单题重跑"
                           onClick={async () => {
                             if (await confirmDialog({ title: "重跑该题？", description: "该题将使用相同参数重新执行，原结果将被覆盖。", confirmText: "重跑" })) retry.mutate({ itemId: i.id });
@@ -539,6 +668,27 @@ export default function RunDetail({ runId, onBack }: { runId: number; onBack: ()
                 ))}
               </tbody>
             </table>
+          </div>
+          {/* 分页：题目量大时逐页浏览，避免记录显示不全 */}
+          <div className="flex items-center justify-between mt-3 text-xs">
+            <span className="text-muted-foreground">
+              第 {(page - 1) * PAGE_SIZE + (itemRows.length ? 1 : 0)}–{(page - 1) * PAGE_SIZE + itemRows.length} 条 · 共 {itemTotal} 条
+            </span>
+            <div className="flex items-center gap-1">
+              <Button size="sm" variant="outline" className="h-7 px-2"
+                disabled={page === 1} onClick={() => setPage(1)}>首页</Button>
+              <Button size="sm" variant="outline" className="h-7 w-7 p-0"
+                disabled={page === 1} onClick={() => setPage(page - 1)}>
+                <ChevronLeft className="h-3.5 w-3.5" />
+              </Button>
+              <span className="w-14 text-center font-data">{page}/{totalPages}</span>
+              <Button size="sm" variant="outline" className="h-7 w-7 p-0"
+                disabled={page >= totalPages} onClick={() => setPage(page + 1)}>
+                <ChevronRight className="h-3.5 w-3.5" />
+              </Button>
+              <Button size="sm" variant="outline" className="h-7 px-2"
+                disabled={page >= totalPages} onClick={() => setPage(totalPages)}>末页</Button>
+            </div>
           </div>
         </TabsContent>
 
@@ -559,7 +709,7 @@ export default function RunDetail({ runId, onBack }: { runId: number; onBack: ()
       </Tabs>
 
       {/* 题目回答详情 */}
-      <Dialog open={itemDetail !== null} onOpenChange={(o) => !o && setItemDetail(null)}>
+      <Dialog open={detailItem !== null} onOpenChange={(o) => !o && setDetailItem(null)}>
         <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
           {detailItem && (
             <>

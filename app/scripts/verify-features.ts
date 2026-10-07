@@ -60,13 +60,13 @@ async function main() {
 
   // ── 人工复核 ──
   console.log("[3] 人工复核");
-  const items = completed ? await caller.runs.items({ runId: completed.id, limit: 10 }) : [];
+  const items = completed ? (await caller.runs.items({ runId: completed.id, limit: 10 })).rows : [];
   const target = items.find((i) => i.status === "done");
   ok("找到可复核记录", !!target);
   if (target) {
     // 模拟分歧：直接提交复核分
     await caller.reports.submitReview({ itemId: target.id, score: 0.95, note: "自检人工裁定" });
-    const after = await caller.runs.items({ runId: completed!.id, modelId: target.modelId, limit: 100 });
+    const after = (await caller.runs.items({ runId: completed!.id, modelId: target.modelId, limit: 100 })).rows;
     const updated = after.find((i) => i.id === target.id);
     ok("复核分覆盖最终分", updated?.finalScore === 0.95 && updated?.reviewScore === 0.95);
   }
