@@ -19,8 +19,8 @@
 | **安装包位置** | GitHub Releases：<https://github.com/luo-sri/llm-arena/releases/tag/v1.2.0> → 下载 `llm-arena-Setup-1.2.0.exe` |
 | 直链（点此直接下载） | <https://github.com/luo-sri/llm-arena/releases/download/v1.2.0/llm-arena-Setup-1.2.0.exe> |
 | 文件名 | `llm-arena-Setup-1.2.0.exe`（本地打包产物与发布文件名一致，均为 ASCII 文件名，避免部分系统下载时中文乱码；安装后程序名仍为「多模型评测竞技场」） |
-| 大小 | 待构建后回填 |
-| SHA256 | 待构建后回填 |
+| 大小 | 约 118.13 MB（123,871,585 字节） |
+| SHA256 | `B4D1F2B4D3D478C5781B3A20A11FDBFD4E4AAF468AE243BC55118BACC87B7FA3` |
 | 安装方式 | 双击运行 → 阅读并**勾选同意**《用户许可、隐私与免责协议》→ 可自定义安装位置 → 完成后可勾选立即运行 |
 | 卸载方式 | 通过「开始菜单 / 控制面板」卸载 → 先展示**清理清单**，勾选同意后卸载（**安装本软件之前就已存在的配置不会被清理**） |
 | **作者联系方式** | **微信：luo09069**（使用中有疑问可直接加微信咨询） |
