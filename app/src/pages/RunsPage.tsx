@@ -243,8 +243,8 @@ export default function RunsPage({ onOpenRun }: { onOpenRun: (id: number) => voi
                     if (!snap?.judgeEnabled || !snap.judgeModelId) {
                       return <span className="text-[11px] text-muted-foreground/70">机器审核</span>;
                     }
-                    const n = modelsList.data?.models.find((m) => m.id === snap.judgeModelId)?.name ?? `#${snap.judgeModelId}`;
-                    return <span className="text-[11px] text-info">AI 评审·{n}</span>;
+                    const n = snap.judgeModelName ?? modelsList.data?.models.find((m) => m.id === snap.judgeModelId)?.name ?? `#${snap.judgeModelId}`;
+                    return <span className="text-[11px] text-info">AI 裁判·{n}{snap.judgeOnly ? "（唯一评分）" : ""}</span>;
                   })()}
                   <span className="text-[11px] text-muted-foreground ml-auto">{fmtTime(r.createdAt)}</span>
                   <button
@@ -365,7 +365,7 @@ export default function RunsPage({ onOpenRun }: { onOpenRun: (id: number) => voi
                 </SelectContent>
               </Select>
               <p className="text-[11px] text-muted-foreground mt-1.5 leading-relaxed">
-                AI 评审老师依据每题公开的评分标准与评分锚点独立打分，与规则判分双通道互校，分歧超阈值自动进入人工复核；为绝对公正，评审模型不可同时作为受测模型（选手/裁判回避）。
+                选择具体评审模型即为「AI 裁判模式」：本次运行的最终分完全以评审分为准，不折中、不进入人工复核；评审调用失败会自动持续重试直到成功，杜绝因裁判故障误判分数。跟随套件配置且套件本身启用了 AI 评审时，同样按 AI 裁判模式处理。为绝对公正，评审模型不可同时作为受测模型（选手/裁判回避）。
               </p>
             </div>
           </div>

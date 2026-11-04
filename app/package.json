@@ -1,7 +1,7 @@
 {
   "name": "llm-arena",
   "private": true,
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "多模型能力评测竞技场",
   "author": "多模型评测竞技场",
   "type": "module",

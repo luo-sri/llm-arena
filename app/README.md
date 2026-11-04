@@ -5,6 +5,8 @@
 > 项目总览、安装包下载、适用系统与作者联系方式，请看仓库根目录的 [README.md](../README.md)。
 > 详细架构 / 逻辑 / 数据模型 / 排错 / 操作手册，请看 [项目说明与交接文档.md](../项目说明与交接文档.md)。
 
+> **当前版本：v1.3.0（已打包发布）**。本版新增：复核批量审批 / 批量打分 / 数字输入、AI 裁判模式（评审分唯一、失败持续重试、免复核）、模型名称快照、报告去重与独立 HTML 下载（内置可交互雷达图，支持悬停数值与模型勾选）、侧边栏自动更新检测与 GitHub Star 入口；同时优化 Toast 显著性/消失速度/不拦截点击、报告「打开」健壮性，并移除报告中的微信/QQ 等隐私联系方式。详见根目录 README 的「版本更新日志」。
+
 ## 快速开始
 
 ```bash
@@ -27,6 +29,8 @@ npm run dev        # 前端 + 后端同端口：http://localhost:3000
 | `npm run selfcheck` | 端到端自检（跑通完整评测流程、竞技场评级、逐题明细分页/失败批量重跑/复核全部忽略，并校验公平性不变量，结束时自动清理） |
 | `npm run verify` | 功能验证（暂停/继续/取消/报告/复核/导入导出/历史对比） |
 | `npm run seed` | 手动写入内置题库与默认套件 |
+
+> 自动更新入口：`electron/main.cjs` 的 `update:check` / `update:install`（GitHub Release 检测、官方域名白名单下载、`/S` 静默覆盖安装），渲染层通过 `electron/preload.cjs` 暴露的 `arenaDesktop` 桥调用。
 
 ## 技术栈
 
@@ -61,7 +65,7 @@ $env:ELECTRON_MIRROR="https://npmmirror.com/mirrors/electron/"
 npm run dist
 ```
 
-产物位于 `release/多模型评测竞技场-安装包-<版本号>.exe`。
+产物位于 `release/llm-arena-Setup-<版本号>.exe`（ASCII 文件名，避免中文乱码与 NSIS 打包报错；安装后显示名仍为「多模型评测竞技场」）。
 
 > ⚠️ 修改许可协议时**只改** `build/license.txt`（UTF-8）；打包前的 `prepare-license.mjs` 会自动生成 `license.utf16le.txt` 供 NSIS 使用。直接手改生成物会导致安装向导中文乱码。
 

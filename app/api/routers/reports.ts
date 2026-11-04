@@ -2,9 +2,9 @@ import { z } from "zod";
 import { eq, and, isNull, desc, inArray } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { createRouter, publicQuery } from "../middleware";
-import { getDb } from "../queries/connection";
+import { getDb, getReadyDb } from "../queries/connection";
 import { reports, runs, runItems, questions, models } from "@db/schema";
-import { DISCLAIMER, CATEGORY_MAP } from "../../contracts/eval";
+import { DISCLAIMER, CATEGORY_MAP, type SuiteConfig } from "../../contracts/eval";
 import { summarizeRun } from "../engine/aggregate";
 import { arenaForRun } from "../engine/arena";
 
@@ -18,13 +18,22 @@ export const reportsRouter = createRouter({
     return rows.map((r) => ({ ...r, runName: rMap.get(r.runId)?.name ?? `#${r.runId}` }));
   }),
 
-  /** 一键生成可公开分享的评测报告 */
+  /** 一键生成可公开分享的评测报告（同一运行复用已有报告，避免重复点击产生多份） */
   generate: publicQuery
     .input(z.object({ runId: z.number(), title: z.string().max(255).optional() }))
     .mutation(async ({ input }) => {
-      const db = getDb();
+      const db = await getReadyDb();
       const run = await db.query.runs.findFirst({ where: eq(runs.id, input.runId) });
       if (!run) throw new Error("运行不存在");
+      const [existing] = await db
+        .select()
+        .from(reports)
+        .where(eq(reports.runId, input.runId))
+        .orderBy(desc(reports.id))
+        .limit(1);
+      if (existing) {
+        return { id: existing.id, shareId: existing.shareId, existing: true };
+      }
       const shareId = randomUUID();
       const [{ id }] = await db
         .insert(reports)
@@ -34,7 +43,7 @@ export const reportsRouter = createRouter({
           title: input.title || `${run.name} — 评测报告`,
         })
         .returning({ id: reports.id });
-      return { id, shareId };
+      return { id, shareId, existing: false };
     }),
 
   remove: publicQuery.input(z.object({ id: z.number() })).mutation(async ({ input }) => {
@@ -44,7 +53,7 @@ export const reportsRouter = createRouter({
 
   /** 公开访问（无需登录）：完整报告数据，含题库版本/参数快照/逐题明细/免责声明 */
   getByShare: publicQuery.input(z.object({ shareId: z.string() })).query(async ({ input }) => {
-    const db = getDb();
+    const db = await getReadyDb();
     const report = await db.query.reports.findFirst({ where: eq(reports.shareId, input.shareId) });
     if (!report) throw new Error("报告不存在或已删除");
     const run = await db.query.runs.findFirst({ where: eq(runs.id, report.runId) });
@@ -83,7 +92,7 @@ export const reportsRouter = createRouter({
       categoryNames: CATEGORY_MAP,
       items: items.map((i) => ({
         id: i.id,
-        modelName: mMap.get(i.modelId)?.name ?? `#${i.modelId}`,
+        modelName: i.modelName ?? mMap.get(i.modelId)?.name ?? `#${i.modelId}`,
         repeatIndex: i.repeatIndex,
         seq: i.seq,
         status: i.status,
@@ -108,9 +117,9 @@ export const reportsRouter = createRouter({
     };
   }),
 
-  /** 人工复核队列：双通道分歧题 + 无通道得分题 */
+  /** 人工复核队列：双通道分歧题 + 无通道得分题；AI 裁判模式的任务不再进入复核 */
   reviewQueue: publicQuery.query(async () => {
-    const db = getDb();
+    const db = await getReadyDb();
     const rows = await db
       .select()
       .from(runItems)
@@ -126,12 +135,15 @@ export const reportsRouter = createRouter({
     const qMap = new Map(qs.map((q) => [q.id, q]));
     const mMap = new Map(ms.map((m) => [m.id, m]));
     const rMap = new Map(rs.map((r) => [r.id, r]));
-    return rows.map((r) => ({
-      ...r,
-      question: qMap.get(r.questionId) ?? null,
-      modelName: mMap.get(r.modelId)?.name ?? `#${r.modelId}`,
-      runName: rMap.get(r.runId)?.name ?? `#${r.runId}`,
-    }));
+    return rows
+      // 兼容历史数据：AI 裁判模式的运行以评审分为最终分，不再需要人工复核
+      .filter((r) => !(rMap.get(r.runId)?.paramSnapshot as SuiteConfig | null)?.judgeOnly)
+      .map((r) => ({
+        ...r,
+        question: qMap.get(r.questionId) ?? null,
+        modelName: r.modelName ?? mMap.get(r.modelId)?.name ?? `#${r.modelId}`,
+        runName: rMap.get(r.runId)?.name ?? `#${r.runId}`,
+      }));
   }),
 
   /** 提交人工复核：复核分覆盖最终分 */
@@ -158,6 +170,71 @@ export const reportsRouter = createRouter({
         })
         .where(eq(runItems.id, input.itemId));
       return { ok: true };
+    }),
+
+  /**
+   * 批量审批：一键采纳每条记录当前的 AI 评审分作为最终分（无评审分时回退规则分）。
+   * 等同于「全部同意 AI 裁判的打分」，无需逐条人工裁定。
+   */
+  approveAllJudgeScores: publicQuery.mutation(async () => {
+    const db = await getReadyDb();
+    const rows = await db
+      .select({
+        id: runItems.id,
+        ruleScore: runItems.ruleScore,
+        judgeScore: runItems.judgeScore,
+      })
+      .from(runItems)
+      .where(and(eq(runItems.needsReview, true), isNull(runItems.reviewedAt)));
+    if (rows.length === 0) return { approved: 0, fallback: 0 };
+
+    let fallback = 0;
+    for (const r of rows) {
+      const useJudge = r.judgeScore !== null;
+      const target = r.judgeScore ?? r.ruleScore ?? 0;
+      if (!useJudge) fallback++;
+      await db
+        .update(runItems)
+        .set({
+          reviewScore: target,
+          reviewNote: useJudge ? "批量审批：采纳 AI 评审分" : "批量审批：无评审分，采纳规则分",
+          reviewedAt: new Date(),
+          needsReview: false,
+          finalScore: target,
+        })
+        .where(eq(runItems.id, r.id));
+    }
+    return { approved: rows.length, fallback };
+  }),
+
+  /** 批量打分：对勾选的复核记录统一写入同一人工分（0~1，精确到 0.01） */
+  batchReview: publicQuery
+    .input(
+      z.object({
+        itemIds: z.array(z.number()).min(1, "请至少选择一条复核记录").max(500),
+        score: z.number().min(0).max(1),
+        note: z.string().max(1000).optional(),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      const db = await getReadyDb();
+      const ids = [...new Set(input.itemIds)];
+      const existing = await db
+        .select({ id: runItems.id })
+        .from(runItems)
+        .where(inArray(runItems.id, ids));
+      if (existing.length === 0) throw new Error("所选记录不存在或已被删除");
+      await db
+        .update(runItems)
+        .set({
+          reviewScore: input.score,
+          reviewNote: input.note ?? null,
+          reviewedAt: new Date(),
+          needsReview: false,
+          finalScore: input.score,
+        })
+        .where(inArray(runItems.id, existing.map((r) => r.id)));
+      return { updated: existing.length };
     }),
 
   /**

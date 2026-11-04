@@ -1,4 +1,4 @@
-import { getDb } from "../queries/connection";
+import { getReadyDb } from "../queries/connection";
 import { runs, runItems, questions, models } from "@db/schema";
 import { eq, inArray } from "drizzle-orm";
 import type { SuiteConfig } from "../../contracts/eval";
@@ -62,7 +62,7 @@ function percentile(sorted: number[], p: number): number {
 
 /** 汇总某次运行的全部模型成绩（多次重复取均值，权重来自参数快照，题目权重来自题库） */
 export async function summarizeRun(runId: number): Promise<ModelSummary[]> {
-  const db = getDb();
+  const db = await getReadyDb();
   const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
   if (!run) throw new Error("运行不存在");
   const cfg = run.paramSnapshot as SuiteConfig;
@@ -73,6 +73,11 @@ export async function summarizeRun(runId: number): Promise<ModelSummary[]> {
   const qs = qIds.length ? await db.select().from(questions).where(inArray(questions.id, qIds)) : [];
   const ms = mIds.length ? await db.select().from(models).where(inArray(models.id, mIds)) : [];
   const qMap = new Map(qs.map((q) => [q.id, q]));
+  // 模型名称快照：优先使用本次运行创建时固化的名称，旧记录再回退到模型表
+  const snapshotNames = new Map<number, string>();
+  for (const it of items) {
+    if (it.modelName && !snapshotNames.has(it.modelId)) snapshotNames.set(it.modelId, it.modelName);
+  }
 
   const summaries: ModelSummary[] = [];
 
@@ -202,7 +207,7 @@ export async function summarizeRun(runId: number): Promise<ModelSummary[]> {
     const attempted = done.length + failed.length;
     summaries.push({
       modelId,
-      modelName: model?.name ?? `#${modelId}`,
+      modelName: snapshotNames.get(modelId) ?? model?.name ?? `#${modelId}`,
       groupId: model?.groupId ?? null,
       total,
       rank: 0,

@@ -55,7 +55,7 @@ export default function ModelsPage() {
     onError: (e) => toast.error(e.message),
   });
   const remove = trpc.models.remove.useMutation({
-    onSuccess: () => { toast.success("已删除"); invalidate(); },
+    onSuccess: () => { toast.success("已删除", { duration: 1200 }); invalidate(); },
     onError: (e) => toast.error(e.message),
   });
   const importBatch = trpc.models.importBatch.useMutation({

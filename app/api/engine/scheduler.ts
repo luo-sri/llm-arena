@@ -1,4 +1,4 @@
-import { getDb } from "../queries/connection";
+import { getDb, getReadyDb } from "../queries/connection";
 import { runs, runItems, runLogs, models, questions } from "@db/schema";
 import { eq, and, sql, inArray } from "drizzle-orm";
 import { callModel } from "./provider";
@@ -197,7 +197,7 @@ export async function startRun(runId: number): Promise<void> {
 
 /** 执行单题：调用模型（含超时与重试）→ 规则判分 → 模型评审 → 分歧进入人工复核 */
 export async function executeItem(runId: number, itemId: number, cfg: SuiteConfig): Promise<void> {
-  const db = getDb();
+  const db = await getReadyDb();
   const item = await db.query.runItems.findFirst({ where: eq(runItems.id, itemId) });
   if (!item || item.status !== "pending") return;
   const question = await db.query.questions.findFirst({ where: eq(questions.id, item.questionId) });
@@ -207,11 +207,36 @@ export async function executeItem(runId: number, itemId: number, cfg: SuiteConfi
     return;
   }
 
+  // AI 裁判模式：以评审分作为唯一最终分，不进入人工复核；裁判不可用时直接失败，避免无分误判
+  const judgeOnly = cfg.judgeOnly === true && !!cfg.judgeModelId;
+  let judgeModel: typeof models.$inferSelect | null = null;
+  if (cfg.judgeEnabled && cfg.judgeModelId) {
+    judgeModel = (await db.query.models.findFirst({ where: eq(models.id, cfg.judgeModelId) })) ?? null;
+    if (judgeOnly && !judgeModel) {
+      await db
+        .update(runItems)
+        .set({
+          status: "failed",
+          error: `AI 评审模型「${cfg.judgeModelName ?? `#${cfg.judgeModelId}`}」不存在或已被删除，无法按评审分判定`,
+          finishedAt: new Date(),
+        })
+        .where(eq(runItems.id, itemId));
+      await log(runId, "error", `[AI 裁判] 题目#${question.id} 评审模型不可用，已标记失败（可恢复评审模型后批量重跑）`);
+      await recomputeRunCounts(runId);
+      return;
+    }
+  }
+
   if (await waitIfPaused(runId)) return;
 
   await db
     .update(runItems)
-    .set({ status: "running", promptSent: question.prompt })
+    .set({
+      status: "running",
+      promptSent: question.prompt,
+      // 旧记录首次执行时补齐模型名为快照，之后改名/删除不再影响
+      modelName: item.modelName ?? model.name,
+    })
     .where(eq(runItems.id, itemId));
 
   // 调用模型：重试策略 = retries 次重试，指数退避
@@ -257,10 +282,43 @@ export async function executeItem(runId: number, itemId: number, cfg: SuiteConfi
   // 模型评审通道
   let judgeScore: number | null = null;
   let judgeReason: string | null = null;
-  const judgeApplies = cfg.judgeEnabled && !!cfg.judgeModelId;
-  if (judgeApplies && cfg.judgeModelId) {
-    const judgeModel = await db.query.models.findFirst({ where: eq(models.id, cfg.judgeModelId) });
-    if (judgeModel) {
+  if (judgeModel) {
+    if (judgeOnly) {
+      // AI 裁判模式：评审分即最终分。调用失败或输出无法解析时持续重试，直到拿到有效评分为止，
+      // 避免因上游抖动把某题误判为无分；重试期间响应暂停/取消，可随时人工介入。
+      let attempt = 0;
+      for (;;) {
+        if (control(runId).cancelled) {
+          await db.update(runItems).set({ status: "pending", promptSent: null }).where(eq(runItems.id, itemId));
+          return;
+        }
+        if (await waitIfPaused(runId)) {
+          await db.update(runItems).set({ status: "pending", promptSent: null }).where(eq(runItems.id, itemId));
+          return;
+        }
+        try {
+          const judgePrompt = buildJudgePrompt(question, result.text);
+          const jr = await callModel(
+            judgeModel,
+            { prompt: judgePrompt, expectedAnswer: null, scoringType: "judge", scoringConfig: null },
+            { ...cfg.params, systemPrompt: "" },
+            0,
+          );
+          const parsed = parseJudgeResponse(jr.text);
+          if (parsed) {
+            judgeScore = parsed.score;
+            judgeReason = parsed.reason;
+            break;
+          }
+          await log(runId, "warn", `[AI 裁判] 题目#${question.id} 第 ${attempt + 1} 次输出无法解析，将持续重试直到成功`);
+        } catch (e) {
+          await log(runId, "warn", `[AI 裁判] 题目#${question.id} 第 ${attempt + 1} 次调用失败：${e instanceof Error ? e.message : e}，将持续重试直到成功`);
+        }
+        attempt++;
+        // 指数退避，最长 30 秒一次，避免持续打满评审接口
+        await new Promise((r) => setTimeout(r, Math.min(30000, 1000 * Math.pow(2, Math.min(attempt, 5)))));
+      }
+    } else {
       try {
         const judgePrompt = buildJudgePrompt(question, result.text);
         const jr = await callModel(
@@ -285,7 +343,10 @@ export async function executeItem(runId: number, itemId: number, cfg: SuiteConfi
   // 合成最终分
   let finalScore: number | null = null;
   let needsReview = false;
-  if (question.scoringType === "judge") {
+  if (judgeOnly) {
+    // AI 裁判模式：直接采用评审分，不折中、不进入人工复核
+    finalScore = judgeScore;
+  } else if (question.scoringType === "judge") {
     finalScore = judgeScore ?? rule.score;
   } else if (rule.score !== null && judgeScore !== null) {
     // 双通道：取均值；分歧超阈值进入人工复核
@@ -310,7 +371,19 @@ export async function executeItem(runId: number, itemId: number, cfg: SuiteConfi
       finalScore,
       needsReview,
       retryCount: attempts - 1 < 0 ? 0 : attempts - 1,
-      scoreDetail: { rule: rule.detail, judge: judgeReason, channel: question.scoringType === "judge" ? (judgeScore !== null ? "judge" : "rule-fallback") : judgeScore !== null ? "dual" : "rule" },
+      scoreDetail: {
+        rule: rule.detail,
+        judge: judgeReason,
+        channel: judgeOnly
+          ? "judge-only"
+          : question.scoringType === "judge"
+            ? judgeScore !== null
+              ? "judge"
+              : "rule-fallback"
+            : judgeScore !== null
+              ? "dual"
+              : "rule",
+      },
       finishedAt: new Date(),
     })
     .where(eq(runItems.id, itemId));

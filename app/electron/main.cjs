@@ -3,6 +3,166 @@ const path = require("path");
 const fs = require("fs");
 const http = require("http");
 const { pathToFileURL } = require("url");
+const { spawn } = require("child_process");
+const https = require("https");
+
+/** 自动更新：仅允许从本项目自己的 GitHub Release 下载，杜绝执行任意来源的可执行文件 */
+const UPSTREAM_REPO = "luo-sri/llm-arena";
+const RELEASES_API = `https://api.github.com/repos/${UPSTREAM_REPO}/releases/latest`;
+const RELEASE_DOWNLOAD_PREFIX = `https://github.com/${UPSTREAM_REPO}/releases/download/`;
+const ALLOWED_REDIRECT_HOSTS = new Set([
+  "github.com",
+  "objects.githubusercontent.com",
+  "github-releases.githubusercontent.com",
+  "release-assets.githubusercontent.com",
+]);
+/** 检查更新结果缓存：避免频繁请求 GitHub API 触发限流 */
+const UPDATE_CACHE_MS = 10 * 60 * 1000;
+let updateCache = null;
+let updateCheckedAt = 0;
+
+/** 请求文本（仅用于 GitHub API，超时 10 秒；自动跟随重定向） */
+function httpsGetText(url, redirects = 0) {
+  return new Promise((resolve, reject) => {
+    if (redirects > 5) return reject(new Error("重定向次数过多"));
+    const req = https.get(
+      url,
+      { headers: { "User-Agent": "llm-arena-updater", Accept: "application/vnd.github+json" }, timeout: 10000 },
+      (res) => {
+        const code = res.statusCode || 0;
+        if (code >= 300 && code < 400 && res.headers.location) {
+          res.resume();
+          const next = new URL(res.headers.location, url).href;
+          httpsGetText(next, redirects + 1).then(resolve, reject);
+          return;
+        }
+        if (code !== 200) {
+          res.resume();
+          return reject(new Error(`HTTP ${code}`));
+        }
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => (body += chunk));
+        res.on("end", () => resolve(body));
+      },
+    );
+    req.on("timeout", () => req.destroy(new Error("请求超时")));
+    req.on("error", reject);
+  });
+}
+
+function versionParts(v) {
+  return String(v || "")
+    .replace(/^v/i, "")
+    .split("-")[0]
+    .split(".")
+    .map((x) => parseInt(x, 10) || 0);
+}
+
+function isNewerVersion(latest, current) {
+  const a = versionParts(latest);
+  const b = versionParts(current);
+  const len = Math.max(a.length, b.length);
+  for (let i = 0; i < len; i++) {
+    const x = a[i] || 0;
+    const y = b[i] || 0;
+    if (x !== y) return x > y;
+  }
+  return false;
+}
+
+/** 查询 GitHub 最新 Release（带 10 分钟缓存，避免触发 API 限流） */
+async function checkLatestRelease(force) {
+  const currentVersion = app.getVersion();
+  if (!force && updateCache && Date.now() - updateCheckedAt < UPDATE_CACHE_MS) return updateCache;
+  try {
+    const raw = await httpsGetText(RELEASES_API);
+    const rel = JSON.parse(raw);
+    const tag = String(rel.tag_name || rel.name || "");
+    const assets = Array.isArray(rel.assets) ? rel.assets : [];
+    const asset = assets.find((a) => /^llm-arena-Setup-.+\.exe$/i.test(String(a.name || "")));
+    const downloadUrl =
+      (asset && asset.browser_download_url) ||
+      (tag ? `${RELEASE_DOWNLOAD_PREFIX}${tag}/llm-arena-Setup-${tag.replace(/^v/i, "")}.exe` : null);
+    const result = {
+      ok: true,
+      currentVersion,
+      latestVersion: tag.replace(/^v/i, ""),
+      hasUpdate: isNewerVersion(tag, currentVersion),
+      downloadUrl,
+      releaseUrl: rel.html_url || `https://github.com/${UPSTREAM_REPO}/releases`,
+      notes: String(rel.body || "").slice(0, 4000),
+      publishedAt: rel.published_at || null,
+    };
+    updateCache = result;
+    updateCheckedAt = Date.now();
+    return result;
+  } catch (e) {
+    return { ok: false, currentVersion, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** 严格校验：只允许本项目官方 Release 的安装包地址 */
+function assertAllowedDownload(url) {
+  let u;
+  try {
+    u = new URL(url);
+  } catch {
+    throw new Error("下载地址无效");
+  }
+  if (
+    u.protocol !== "https:" ||
+    u.hostname !== "github.com" ||
+    !u.pathname.startsWith(`/${UPSTREAM_REPO}/releases/download/`)
+  ) {
+    throw new Error("下载地址不属于本项目官方 Release，已拒绝执行");
+  }
+  return u.href;
+}
+
+/** 下载安装包（进度回调；跳转域名必须为 GitHub 官方域名） */
+function downloadFile(url, dest, onProgress, redirects = 0) {
+  return new Promise((resolve, reject) => {
+    if (redirects > 6) return reject(new Error("下载重定向次数过多"));
+    if (redirects > 0) {
+      let u;
+      try {
+        u = new URL(url);
+      } catch {
+        return reject(new Error("下载地址无效"));
+      }
+      if (!ALLOWED_REDIRECT_HOSTS.has(u.hostname)) {
+        return reject(new Error("下载跳转到了非官方域名，已中止"));
+      }
+    }
+    const req = https.get(url, { headers: { "User-Agent": "llm-arena-updater" }, timeout: 20000 }, (res) => {
+      const code = res.statusCode || 0;
+      if (code >= 300 && code < 400 && res.headers.location) {
+        res.resume();
+        const next = new URL(res.headers.location, url).href;
+        downloadFile(next, dest, onProgress, redirects + 1).then(resolve, reject);
+        return;
+      }
+      if (code !== 200) {
+        res.resume();
+        return reject(new Error(`下载失败：HTTP ${code}`));
+      }
+      const total = Number(res.headers["content-length"] || 0);
+      let received = 0;
+      const out = fs.createWriteStream(dest);
+      res.on("data", (chunk) => {
+        received += chunk.length;
+        onProgress(received, total);
+      });
+      res.pipe(out);
+      out.on("finish", () => out.close(() => resolve({ received, total })));
+      out.on("error", reject);
+      res.on("error", reject);
+    });
+    req.on("timeout", () => req.destroy(new Error("下载超时")));
+    req.on("error", reject);
+  });
+}
 
 const gotLock = app.requestSingleInstanceLock();
 
@@ -211,6 +371,92 @@ if (!gotLock) {
     ipcMain.handle("desktop:minimize-to-tray", () => {
       if (mainWindow) mainWindow.hide();
       return true;
+    });
+    // 用系统默认浏览器打开链接（仅允许 http/https，避免 file:// 等本地协议）
+    ipcMain.handle("desktop:open-external", async (_e, url) => {
+      try {
+        const u = new URL(String(url));
+        if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+        await shell.openExternal(u.href);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+
+    // ─── 自动更新：检测 GitHub 最新 Release → 下载 → 静默覆盖安装 ───
+    ipcMain.handle("desktop:get-version", () => app.getVersion());
+    ipcMain.handle("update:check", async (_e, force) => checkLatestRelease(force === true));
+    ipcMain.handle("update:install", async (event, payload) => {
+      const send = (data) => {
+        try {
+          if (!event.sender.isDestroyed()) event.sender.send("update:progress", data);
+        } catch {
+          /* 窗口已关闭，忽略 */
+        }
+      };
+      try {
+        const info = await checkLatestRelease(false);
+        if (!info.ok) throw new Error(info.error || "检查更新失败");
+        // 静默覆盖安装需要当前安装目录可写；若装在受保护路径则提示手动更新，避免更新后无法重启
+        try {
+          fs.accessSync(path.dirname(app.getPath("exe")), fs.constants.W_OK);
+        } catch {
+          throw new Error("当前安装目录不可写（可能安装在受保护路径），请前往 GitHub Releases 手动下载安装包更新");
+        }
+        const url = assertAllowedDownload((payload && payload.downloadUrl) || info.downloadUrl || "");
+        const dir = path.join(app.getPath("temp"), "llm-arena-update");
+        fs.mkdirSync(dir, { recursive: true });
+        const base = path.basename(new URL(url).pathname) || "llm-arena-Setup-update.exe";
+        const dest = path.join(dir, base.replace(/[^\w.-]/g, "_"));
+        try {
+          if (fs.existsSync(dest)) fs.unlinkSync(dest);
+        } catch {
+          /* 旧的残留文件删除失败时继续覆盖 */
+        }
+
+        send({ phase: "downloading", percent: 0, message: "正在下载更新包…" });
+        let lastSent = 0;
+        const { received, total } = await downloadFile(url, dest, (bytes, size) => {
+          const now = Date.now();
+          if (now - lastSent < 500) return;
+          lastSent = now;
+          const percent = size ? Math.round((bytes / size) * 1000) / 10 : undefined;
+          send({
+            phase: "downloading",
+            percent,
+            message: `已下载 ${(bytes / 1048576).toFixed(1)} MB${size ? ` / ${(size / 1048576).toFixed(1)} MB` : ""}`,
+          });
+        });
+        const sizeNow = Number(received) || fs.statSync(dest).size;
+        if (sizeNow < 10 * 1024 * 1024) {
+          try { fs.unlinkSync(dest); } catch { /* ignore */ }
+          throw new Error("安装包下载不完整（文件过小），已取消更新");
+        }
+
+        send({ phase: "installing", message: "下载完成，应用即将关闭并静默安装新版本…" });
+        // 延迟启动静默安装：确保本应用已完全退出，安装器才能覆盖程序文件；
+        // 安装完成后自动重新启动应用（静默安装不会经过「完成页」，需显式拉起）。
+        const escaped = dest.replace(/'/g, "''");
+        const exePath = app.getPath("exe").replace(/'/g, "''");
+        const ps = [
+          "Start-Sleep -Seconds 3",
+          `Start-Process -FilePath '${escaped}' -ArgumentList '/S' -Wait`,
+          "Start-Sleep -Seconds 2",
+          `if (Test-Path '${exePath}') { Start-Process -FilePath '${exePath}' }`,
+        ].join("; ");
+        spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", ps], {
+          detached: true,
+          stdio: "ignore",
+          windowsHide: true,
+        }).unref();
+        setTimeout(() => quitApp(), 1000);
+        return { ok: true };
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        send({ phase: "error", message: msg });
+        return { ok: false, error: msg };
+      }
     });
 
     try {

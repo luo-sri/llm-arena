@@ -1,5 +1,5 @@
 import { eq, inArray, desc } from "drizzle-orm";
-import { getDb } from "../queries/connection";
+import { getReadyDb } from "../queries/connection";
 import { runs, runItems, questions, models, battles } from "@db/schema";
 import { callModel } from "./provider";
 import { stableHash, mulberry32 } from "./random";
@@ -94,7 +94,7 @@ export function parsePairwiseResponse(text: string): { winner: "A" | "B" | "tie"
  * AI 裁决失败自动回退分差判定并记录。
  */
 export async function generateBattles(runId: number): Promise<{ total: number; aiJudged: number }> {
-  const db = getDb();
+  const db = await getReadyDb();
   const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
   if (!run) throw new Error("运行不存在");
   const cfg = run.paramSnapshot as SuiteConfig;
@@ -118,6 +118,14 @@ export async function generateBattles(runId: number): Promise<{ total: number; a
   const qIds = [...new Set(scored.map((i) => i.questionId))];
   const qs = await db.select().from(questions).where(inArray(questions.id, qIds));
   const qMap = new Map(qs.map((q) => [q.id, q]));
+
+  // 模型名称快照：写入战报时固化名称，之后模型改名/删除不影响历史战报与排行榜
+  const nameById = new Map<number, string>();
+  for (const it of scored) {
+    if (it.modelName && !nameById.has(it.modelId)) nameById.set(it.modelId, it.modelName);
+  }
+  const ms = await db.select().from(models).where(inArray(models.id, modelIds));
+  for (const m of ms) if (!nameById.has(m.id)) nameById.set(m.id, m.name);
 
   let judgeModel: typeof models.$inferSelect | null = null;
   if (cfg.judgeEnabled && cfg.judgeModelId) {
@@ -158,6 +166,8 @@ export async function generateBattles(runId: number): Promise<{ total: number; a
             repeatIndex,
             modelAId: aId,
             modelBId: bId,
+            modelAName: nameById.get(aId) ?? null,
+            modelBName: nameById.get(bId) ?? null,
             winner,
             method,
             reason,
@@ -367,7 +377,7 @@ export function winMatrix(rows: BattleRowLite[], ids: number[]): PairwiseCell[] 
 
 /** 读取对战记录（可跨运行） */
 async function loadBattleRows(runId?: number): Promise<BattleRowLite[]> {
-  const db = getDb();
+  const db = await getReadyDb();
   const rows = runId
     ? await db.select().from(battles).where(eq(battles.runId, runId))
     : await db.select().from(battles).orderBy(desc(battles.id)).limit(20000);
@@ -380,14 +390,29 @@ async function loadBattleRows(runId?: number): Promise<BattleRowLite[]> {
 
 /** 单次运行的竞技场视图：评级 + 胜率矩阵 + 判定方式统计 */
 export async function arenaForRun(runId: number) {
-  const db = getDb();
+  const db = await getReadyDb();
   const rows = await loadBattleRows(runId);
   const rawRows = await db.select().from(battles).where(eq(battles.runId, runId));
   const modelIds = [...new Set(rows.flatMap((r) => [r.a, r.b]))].sort((x, y) => x - y);
   const ms = modelIds.length
     ? await db.select().from(models).where(inArray(models.id, modelIds))
     : [];
-  const nameMap = new Map(ms.map((m) => [m.id, m.name]));
+  // 名称优先取战报快照，其次取逐题明细快照，最后回退到模型表实时名称
+  const nameMap = new Map<number, string>();
+  for (const b of rawRows) {
+    if (b.modelAName) nameMap.set(b.modelAId, b.modelAName);
+    if (b.modelBName) nameMap.set(b.modelBId, b.modelBName);
+  }
+  const itemNames = modelIds.length
+    ? await db
+        .select({ modelId: runItems.modelId, modelName: runItems.modelName })
+        .from(runItems)
+        .where(eq(runItems.runId, runId))
+    : [];
+  for (const it of itemNames) {
+    if (it.modelName && !nameMap.has(it.modelId)) nameMap.set(it.modelId, it.modelName);
+  }
+  for (const m of ms) if (!nameMap.has(m.id)) nameMap.set(m.id, m.name);
   const methodCount = rawRows.reduce<Record<string, number>>((acc, r) => {
     acc[r.method] = (acc[r.method] ?? 0) + 1;
     return acc;
@@ -406,13 +431,29 @@ export async function arenaForRun(runId: number) {
 
 /** 全局排行榜：聚合全部运行的对战 + 各模型近期平均总分 */
 export async function globalLeaderboard() {
-  const db = getDb();
+  const db = await getReadyDb();
   const rows = await loadBattleRows();
   const modelIds = [...new Set(rows.flatMap((r) => [r.a, r.b]))].sort((x, y) => x - y);
   const ms = modelIds.length
     ? await db.select().from(models).where(inArray(models.id, modelIds))
     : [];
-  const nameMap = new Map(ms.map((m) => [m.id, m.name]));
+  // 名称优先取历史战报快照，模型被删除后排行榜仍可辨认
+  const battleNames = await db
+    .select({
+      a: battles.modelAId,
+      b: battles.modelBId,
+      an: battles.modelAName,
+      bn: battles.modelBName,
+    })
+    .from(battles)
+    .orderBy(desc(battles.id))
+    .limit(20000);
+  const nameMap = new Map<number, string>();
+  for (const b of battleNames) {
+    if (b.an) nameMap.set(b.a, b.an);
+    if (b.bn) nameMap.set(b.b, b.bn);
+  }
+  for (const m of ms) if (!nameMap.has(m.id)) nameMap.set(m.id, m.name);
 
   // 近期运行的平均总分（最多 20 次）
   const completed = await db

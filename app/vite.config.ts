@@ -11,6 +11,10 @@ export default defineConfig({
     react()],
   server: {
     port: 3000,
+    // 不监听打包产物与 SQLite 数据文件：避免 100MB+ 安装包被占用时触发 EBUSY 导致开发服务器崩溃
+    watch: {
+      ignored: ["**/release/**", "**/data/**"],
+    },
   },
   resolve: {
     alias: {

@@ -4,8 +4,9 @@ import { PageHeader } from "@/components/layout";
 import { EmptyState, fmtTime, download } from "@/components/common";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import { Copy, Download, Trash2, ExternalLink, FileJson, FileText } from "lucide-react";
+import { Copy, Download, Trash2, ExternalLink, FileJson, FileText, Globe } from "lucide-react";
 import { DISCLAIMER, CATEGORY_MAP } from "../../contracts/eval";
+import { buildReportHtml, type ReportPayload } from "@/lib/report-html";
 import { useConfirm } from "@/components/confirm";
 
 export default function ReportsPage() {
@@ -29,6 +30,27 @@ export default function ReportsPage() {
     );
   };
 
+  /** 打开报告：桌面端走系统浏览器（shell.openExternal），浏览器端走新标签页；失败自动复制链接兜底 */
+  const openReport = async (shareId: string) => {
+    const url = shareUrl(shareId);
+    try {
+      if (window.arenaDesktop?.openExternal) {
+        const ok = await window.arenaDesktop.openExternal(url);
+        if (!ok) throw new Error("open failed");
+      } else {
+        const win = window.open(url, "_blank", "noopener,noreferrer");
+        if (!win) throw new Error("popup blocked");
+      }
+    } catch {
+      try {
+        await navigator.clipboard?.writeText(url);
+      } catch {
+        /* 剪贴板不可用时忽略 */
+      }
+      toast.info("无法直接打开报告，已复制分享链接，请粘贴到浏览器地址栏");
+    }
+  };
+
   /** 导出 JSON（完整数据：题库版本/参数快照/逐题明细/免责声明） */
   const exportJson = async (shareId: string, title: string) => {
     setExporting(shareId);
@@ -36,6 +58,22 @@ export default function ReportsPage() {
       const data = await utils.reports.getByShare.fetch({ shareId });
       download(`${title}.json`, JSON.stringify(data, null, 2));
       toast.success("JSON 报告已导出");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "导出失败");
+    } finally {
+      setExporting(null);
+    }
+  };
+
+  /** 导出单文件 HTML（自包含：样式/图表/折叠全部内置，离线可正常浏览与分享） */
+  const exportHtml = async (shareId: string, title: string) => {
+    setExporting(shareId);
+    try {
+      const data = await utils.reports.getByShare.fetch({ shareId });
+      const html = buildReportHtml(data as unknown as ReportPayload);
+      const safe = title.replace(/[\\/:*?"<>|]/g, "_").slice(0, 120);
+      download(`${safe}.html`, html, "text/html");
+      toast.success("HTML 网页报告已导出，可直接发送给他人离线浏览");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "导出失败");
     } finally {
@@ -102,7 +140,7 @@ export default function ReportsPage() {
 
   return (
     <div>
-      <PageHeader title="报告中心" desc="一键生成可公开分享的评测报告（网页 / Markdown 文档 / JSON），在运行详情页点击「生成分享报告」" />
+      <PageHeader title="报告中心" desc="一键生成可公开分享的评测报告（网页链接 / 独立 HTML 文件 / Markdown 文档 / JSON），在运行详情页点击「生成分享报告」" />
       {(list.data?.length ?? 0) === 0 ? (
         <EmptyState text="暂无报告" hint="完成一次评测后，在运行详情页生成分享报告" />
       ) : (
@@ -119,10 +157,12 @@ export default function ReportsPage() {
                 <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => copyLink(r.shareId)}>
                   <Copy className="h-3 w-3 mr-1" />复制链接
                 </Button>
-                <Button size="sm" variant="outline" className="h-7 text-xs" asChild>
-                  <a href={shareUrl(r.shareId)} target="_blank" rel="noreferrer">
-                    <ExternalLink className="h-3 w-3 mr-1" />打开
-                  </a>
+                <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => openReport(r.shareId)}>
+                  <ExternalLink className="h-3 w-3 mr-1" />打开
+                </Button>
+                <Button size="sm" variant="outline" className="h-7 text-xs" disabled={exporting === r.shareId}
+                  onClick={() => exportHtml(r.shareId, r.title)}>
+                  <Globe className="h-3 w-3 mr-1" />HTML
                 </Button>
                 <Button size="sm" variant="outline" className="h-7 text-xs" disabled={exporting === r.shareId}
                   onClick={() => exportMd(r.shareId, r.title)}>
@@ -145,7 +185,7 @@ export default function ReportsPage() {
       )}
       <div className="mt-4 flex items-center gap-2 text-[11px] text-muted-foreground">
         <Download className="h-3 w-3" />
-        报告包含：题库版本与内容哈希、参数快照、模型排名与维度得分、逐题明细（题目/回答/判分）、免责声明。
+        报告包含：题库版本与内容哈希、参数快照、模型排名与维度得分、逐题明细（题目/回答/判分）、免责声明。HTML 为单文件自包含格式，离线也能正常浏览与分享。
       </div>
       {confirmElement}
     </div>

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { eq, and, desc, gt, sql, inArray } from "drizzle-orm";
 import { createRouter, publicQuery } from "../middleware";
-import { getDb } from "../queries/connection";
+import { getDb, getReadyDb } from "../queries/connection";
 import { runs, runItems, runLogs, questions, models, evalSuites, battles, reports } from "@db/schema";
 import { BANK_VERSION, type SuiteConfig } from "../../contracts/eval";
 import { computeBankHash } from "../engine/bank";
@@ -25,7 +25,7 @@ export const runsRouter = createRouter({
       }),
     )
     .mutation(async ({ input }) => {
-      const db = getDb();
+      const db = await getReadyDb();
       await recoverRunsOnce();
       const suite = await db.query.evalSuites.findFirst({ where: eq(evalSuites.id, input.suiteId) });
       if (!suite) throw new Error("测试套件不存在");
@@ -59,6 +59,11 @@ export const runsRouter = createRouter({
         judgeName = jm.name;
       }
 
+      // AI 裁判模式：只要本次运行启用了评审模型，就以评审分作为唯一最终分，不再进入人工复核。
+      // 评审名称同时固化到参数快照，避免模型改名/删除后无法辨认当时的裁判。
+      cfg.judgeOnly = !!(cfg.judgeEnabled && cfg.judgeModelId);
+      cfg.judgeModelName = cfg.judgeOnly ? judgeName : null;
+
       // 选题：启用维度 + 难度分层 + 题量限制（按种子确定性抽样，所有模型同一套题）
       const allQuestions = await db.select().from(questions).orderBy(questions.id);
       const chosen = selectQuestions(allQuestions, cfg, seed);
@@ -90,6 +95,7 @@ export const runsRouter = createRouter({
       const itemValues: {
         runId: number;
         modelId: number;
+        modelName: string;
         questionId: number;
         repeatIndex: number;
         seq: number;
@@ -101,6 +107,8 @@ export const runsRouter = createRouter({
             itemValues.push({
               runId,
               modelId: model.id,
+              // 快照模型名：后续模型改名/删除都不会影响本次历史记录
+              modelName: model.name,
               questionId: q.id,
               repeatIndex: r,
               seq,
@@ -115,7 +123,7 @@ export const runsRouter = createRouter({
       }
 
       const judgeDesc = cfg.judgeEnabled && cfg.judgeModelId
-        ? `AI 评审「${judgeName}」#${cfg.judgeModelId}`
+        ? `AI 评审「${judgeName}」#${cfg.judgeModelId}${cfg.judgeOnly ? "（唯一评分，免人工复核）" : ""}`
         : "机器审核（公开规则判分）";
       const overrideNote =
         input.judgeOverride && input.judgeOverride !== "suite" ? "（本次运行已覆盖套件配置）" : "";
@@ -250,7 +258,7 @@ export const runsRouter = createRouter({
       }),
     )
     .query(async ({ input }) => {
-      const db = getDb();
+      const db = await getReadyDb();
       const conds = [eq(runItems.runId, input.runId)];
       if (input.modelId) conds.push(eq(runItems.modelId, input.modelId));
       if (input.status) conds.push(eq(runItems.status, input.status));
@@ -277,7 +285,8 @@ export const runsRouter = createRouter({
         rows: rows.map((r) => ({
           ...r,
           question: qMap.get(r.questionId) ?? null,
-          modelName: mMap.get(r.modelId)?.name ?? `#${r.modelId}`,
+          // 优先使用运行时快照名称；旧记录回退到模型表实时名称
+          modelName: r.modelName ?? mMap.get(r.modelId)?.name ?? `#${r.modelId}`,
         })),
         total: Number(countRow.n),
       };

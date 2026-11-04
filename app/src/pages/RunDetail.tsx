@@ -108,7 +108,11 @@ export default function RunDetail({ runId, onBack }: { runId: number; onBack: ()
     onSuccess: (r) => {
       const url = `${window.location.origin}${window.location.pathname}?report=${r.shareId}`;
       navigator.clipboard?.writeText(url).catch(() => {});
-      toast.success("报告已生成，分享链接已复制到剪贴板");
+      toast.success(
+        r.existing ? "报告已存在，已复用分享链接" : "报告生成成功，分享链接已复制",
+        { description: "可在「报告中心」打开或下载 HTML 网页版" },
+      );
+      utils.reports.list.invalidate();
     },
     onError: (e) => toast.error(e.message),
   });
@@ -228,7 +232,7 @@ export default function RunDetail({ runId, onBack }: { runId: number; onBack: ()
                 <span>重复 {cfg.params.repeatCount} 轮</span>
                 <span>并发 {cfg.params.concurrency}</span>
                 <span>种子 {cfg.params.seed}</span>
-                <span>评审 {cfg.judgeEnabled ? "双通道" : "仅规则"}</span>
+                <span>评审 {cfg.judgeEnabled ? (cfg.judgeOnly ? "AI 裁判（唯一评分）" : "双通道") : "仅规则"}</span>
                 <span className="col-span-2 truncate" title={cfg.params.systemPrompt}>系统提示词：{cfg.params.systemPrompt || "（无）"}</span>
               </div>
             )}

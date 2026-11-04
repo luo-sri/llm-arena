@@ -127,6 +127,8 @@ export const runItems = sqliteTable(
     id: integer("id").primaryKey({ autoIncrement: true }),
     runId: integer("run_id").notNull(),
     modelId: integer("model_id").notNull(),
+    /** 模型名称快照：模型在「模型管理」中被改名或删除后，历史任务仍显示当时的名称 */
+    modelName: text("model_name"),
     questionId: integer("question_id").notNull(),
     repeatIndex: integer("repeat_index").notNull().default(0),
     /** 由种子确定性得出的全局顺序，所有模型一致 */
@@ -200,6 +202,9 @@ export const battles = sqliteTable(
     repeatIndex: integer("repeat_index").notNull().default(0),
     modelAId: integer("model_a_id").notNull(),
     modelBId: integer("model_b_id").notNull(),
+    /** 双方模型名称快照：模型改名/删除后，历史战报与排行榜仍显示当时的名称 */
+    modelAName: text("model_a_name"),
+    modelBName: text("model_b_name"),
     /** A / B / tie */
     winner: text("winner").notNull(),
     /** ai_judge=评审模型成对裁决 / score_diff=最终分差判定 */

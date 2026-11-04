@@ -95,6 +95,10 @@ export interface SuiteConfig {
   levels?: number[];
   judgeEnabled: boolean;
   judgeModelId: number | null;
+  /** 评审模型名称快照：模型改名/删除后，历史运行仍可辨认当时使用的裁判 */
+  judgeModelName?: string | null;
+  /** AI 裁判模式：以评审分作为唯一最终分，不进入人工复核 */
+  judgeOnly?: boolean;
   /** 双通道判分时，规则分与评审分差异超过该阈值则进入人工复核 */
   reviewThreshold: number;
   params: EvalParams;

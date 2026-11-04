@@ -107,6 +107,30 @@
   z-index: 10000 !important;
 }
 
+/* Toast：不透明高对比 + 状态色左边条；整体不拦截鼠标，避免挡住下方按钮连续操作 */
+[data-sonner-toaster] {
+  pointer-events: none !important;
+}
+[data-sonner-toast] {
+  pointer-events: none !important;
+  background: hsl(var(--popover)) !important;
+  color: hsl(var(--popover-foreground)) !important;
+  border: 1px solid hsl(var(--border)) !important;
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.18), 0 2px 6px rgb(0 0 0 / 0.08) !important;
+  backdrop-filter: none !important;
+  font-weight: 500;
+}
+[data-sonner-toast][data-type="success"] { border-left: 3px solid hsl(var(--success)) !important; }
+[data-sonner-toast][data-type="error"] { border-left: 3px solid hsl(var(--destructive)) !important; }
+[data-sonner-toast][data-type="warning"] { border-left: 3px solid hsl(var(--warning)) !important; }
+[data-sonner-toast][data-type="info"] { border-left: 3px solid hsl(var(--info)) !important; }
+[data-sonner-toast] [data-description] {
+  color: hsl(var(--muted-foreground)) !important;
+}
+[data-sonner-toast][data-type="success"] svg { color: hsl(var(--success)); }
+[data-sonner-toast][data-type="error"] svg { color: hsl(var(--destructive)); }
+[data-sonner-toast][data-type="warning"] svg { color: hsl(var(--warning)); }
+
 /* 主题切换瞬间给主要表面加柔和过渡（仅颜色，不影响布局性能） */
 .card-surface,
 aside,

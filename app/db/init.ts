@@ -84,6 +84,7 @@ const DDL = [
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id INTEGER NOT NULL,
     model_id INTEGER NOT NULL,
+    model_name TEXT,
     question_id INTEGER NOT NULL,
     repeat_index INTEGER NOT NULL DEFAULT 0,
     seq INTEGER NOT NULL DEFAULT 0,
@@ -132,6 +133,8 @@ const DDL = [
     repeat_index INTEGER NOT NULL DEFAULT 0,
     model_a_id INTEGER NOT NULL,
     model_b_id INTEGER NOT NULL,
+    model_a_name TEXT,
+    model_b_name TEXT,
     winner TEXT NOT NULL,
     method TEXT NOT NULL,
     reason TEXT,
@@ -199,6 +202,23 @@ async function addColumnIfMissing(ddl: string) {
 async function runColumnMigrations() {
   // 旧库升级：runs 增加套件名快照列
   await addColumnIfMissing(`ALTER TABLE runs ADD COLUMN suite_name TEXT`);
+  // 旧库升级：逐题明细增加模型名称快照（模型改名/删除后历史记录不变）
+  await addColumnIfMissing(`ALTER TABLE run_items ADD COLUMN model_name TEXT`);
+  // 旧库升级：竞技场战报增加双方模型名称快照
+  await addColumnIfMissing(`ALTER TABLE battles ADD COLUMN model_a_name TEXT`);
+  await addColumnIfMissing(`ALTER TABLE battles ADD COLUMN model_b_name TEXT`);
+
+  // 回填历史快照：只填充仍为空的记录，重复执行无副作用。
+  // 说明：若模型在升级前已被改名，只能固化「当前名称」；升级后再改名/删除则不再影响历史记录。
+  await getDb().run(sql.raw(
+    `UPDATE run_items SET model_name = (SELECT name FROM models WHERE models.id = run_items.model_id) WHERE model_name IS NULL`,
+  ));
+  await getDb().run(sql.raw(
+    `UPDATE battles SET model_a_name = (SELECT name FROM models WHERE models.id = battles.model_a_id) WHERE model_a_name IS NULL`,
+  ));
+  await getDb().run(sql.raw(
+    `UPDATE battles SET model_b_name = (SELECT name FROM models WHERE models.id = battles.model_b_id) WHERE model_b_name IS NULL`,
+  ));
 }
 
 /** 内置公开题库：跨版本按题干去重幂等写入，题库升级时自动补入新增题并同步已有题的公开内容 */

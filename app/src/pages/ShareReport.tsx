@@ -7,6 +7,10 @@ import {
   RadarChart, PolarGrid, PolarAngleAxis, Radar, ResponsiveContainer, Tooltip, Legend,
 } from "recharts";
 import { CATEGORIES } from "../../contracts/eval";
+import {
+  APP_AUTHOR, APP_NAME, APP_NAME_EN, GITHUB_ICON_PATH,
+  REPORT_EXTRA_DISCLAIMER, REPO_NAME, REPO_URL,
+} from "@/lib/site";
 
 export default function ShareReport({ shareId, onClose }: { shareId: string; onClose?: () => void }) {
   const report = trpc.reports.getByShare.useQuery({ shareId });
@@ -44,11 +48,33 @@ export default function ShareReport({ shareId, onClose }: { shareId: string; onC
   return (
     <div className="min-h-screen bg-background">
       <div className="max-w-[1100px] mx-auto px-6 py-8">
-        {/* 头部 */}
-        <div className="flex items-center gap-2 text-xs text-muted-foreground mb-2">
-          <Activity className="h-4 w-4 text-primary" />
-          <span>多模型自动化能力评测系统 · 公开评测报告</span>
-          {onClose && <Button size="sm" variant="ghost" className="h-6 text-xs ml-auto" onClick={onClose}>进入系统 →</Button>}
+        {/* 品牌页头：应用与仓库宣传 */}
+        <div className="flex flex-wrap items-center gap-3 border border-border rounded-md bg-card/60 px-4 py-3 mb-3">
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+              <Activity className="h-4 w-4" />
+            </div>
+            <div>
+              <div className="text-sm font-semibold tracking-wide">{APP_NAME} · {APP_NAME_EN}</div>
+              <div className="text-[11px] text-muted-foreground mt-0.5">
+                本报告由开源评测工具「{APP_NAME}」自动生成 · 作者：{APP_AUTHOR}
+              </div>
+            </div>
+          </div>
+          <div className="ml-auto flex items-center gap-2">
+            <a
+              href={REPO_URL} target="_blank" rel="noreferrer"
+              className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs hover:border-foreground/40 transition-colors"
+              title="打开开源仓库"
+            >
+              <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
+                <path fill="currentColor" d={GITHUB_ICON_PATH} />
+              </svg>
+              {REPO_NAME}
+            </a>
+            <span className="text-[11px] text-muted-foreground">开源项目 · 欢迎 Star ⭐</span>
+            {onClose && <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={onClose}>进入系统 →</Button>}
+          </div>
         </div>
         <h1 className="text-2xl font-semibold">{d.title}</h1>
         <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-1 text-xs text-muted-foreground border border-border rounded-md p-3.5 bg-card/60">
@@ -229,8 +255,17 @@ export default function ShareReport({ shareId, onClose }: { shareId: string; onC
         )}
 
         {/* 免责声明 */}
-        <div className="mt-8 border-t border-border pt-4 text-[11px] text-muted-foreground leading-relaxed">
-          {d.disclaimer}
+        <div className="mt-8 border-t border-border pt-4 text-[11px] text-muted-foreground leading-relaxed space-y-2">
+          <div>{d.disclaimer}</div>
+          <div>{REPORT_EXTRA_DISCLAIMER}</div>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+            <span>生成工具：
+              <a href={REPO_URL} target="_blank" rel="noreferrer" className="text-foreground underline decoration-dotted underline-offset-2">
+                {APP_NAME}（{REPO_NAME}）
+              </a>
+            </span>
+            <span>作者：{APP_AUTHOR}</span>
+          </div>
         </div>
       </div>
     </div>
